@@ -99,8 +99,15 @@ def build_panel(kind: str, column: str, dates: pd.DatetimeIndex) -> pd.DataFrame
 
 
 def trading_dates(start: str, end: str) -> pd.DatetimeIndex:
-    """KRX 실제 거래일 목록 (휴장일 제외)."""
-    index = stock.get_index_ohlcv(
-        pd.Timestamp(start).strftime("%Y%m%d"), pd.Timestamp(end).strftime("%Y%m%d"), "1001"
-    )
-    return pd.DatetimeIndex(index.index)
+    """
+    KRX 실제 거래일 목록 (휴장일 제외).
+
+    지수 API(get_index_ohlcv)는 로그인이 있어야 응답하는데, 우리는 로그인을
+    쓰지 않기로 했다. 대신 어차피 캐시돼 있는 삼성전자 OHLCV의 날짜 인덱스를
+    거래일 달력으로 쓴다 — 시가총액 1위 종목이 거래정지될 일은 사실상 없으니
+    실제 거래일과 동일하다.
+    """
+    from src.data_loader.krx_loader import load_ohlcv
+
+    prices = load_ohlcv("005930", start, end)
+    return pd.DatetimeIndex(prices.index)
