@@ -12,8 +12,10 @@ data/processed/
 *.parquet
 !config/**/*.csv
 
-# 환경/시크릿
+# 환경/시크릿 (API 키 등 - 어떤 이름이든 .env로 끝나면 전부 제외)
 .env
+*.env
+.env.*
 
 # OS / 에디터
 .DS_Store

@@ -19,30 +19,11 @@ from src.costs.cost_model import CostModel
 from src.engine.backtest import run_backtest
 from src.features.technical import build_features
 from src.signals.rules.mean_reversion import disparity_zscore_signal
-
-
-def _make_synthetic_ohlcv(n: int = 200, seed: int = 0) -> pd.DataFrame:
-    rng = np.random.default_rng(seed)
-    dates = pd.date_range("2020-01-01", periods=n, freq="B")
-    log_returns = rng.normal(0, 0.015, size=n)
-    close = 10_000 * np.exp(np.cumsum(log_returns))
-    volume = rng.integers(100_000, 1_000_000, size=n)
-    df = pd.DataFrame(
-        {
-            "open": close,
-            "high": close * 1.01,
-            "low": close * 0.99,
-            "close": close,
-            "volume": volume,
-        },
-        index=dates,
-    )
-    df.index.name = "date"
-    return df
+from tests.factories import make_synthetic_ohlcv
 
 
 def test_position_unaffected_by_future_prices():
-    df = _make_synthetic_ohlcv()
+    df = make_synthetic_ohlcv()
     cutoff = 150
 
     features_full = build_features(df)
@@ -69,7 +50,7 @@ def test_position_unaffected_by_future_prices():
 
 
 def test_signal_shift_is_the_only_lookahead_guard():
-    df = _make_synthetic_ohlcv()
+    df = make_synthetic_ohlcv()
     features = build_features(df)
     signal = disparity_zscore_signal(features)
     result = run_backtest(df, signal, CostModel())

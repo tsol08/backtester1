@@ -36,12 +36,17 @@ def win_rate(returns: pd.Series, trades: pd.Series) -> float:
     return float((day_returns > 0).mean())
 
 
+def trade_count(trades: pd.Series | pd.DataFrame) -> int:
+    """단일 종목(Series)/포트폴리오(DataFrame) 결과 모두에서 매매 발생 횟수를 센다."""
+    return int((np.abs(np.asarray(trades)) > 1e-9).sum())
+
+
 def summarize(result) -> dict:
     return {
         "CAGR": cagr(result.equity_curve),
         "Sharpe": sharpe_ratio(result.returns),
         "MDD": max_drawdown(result.equity_curve),
         "총비용(원)": float(result.cost_paid.sum()),
-        "거래횟수": int((result.trades.abs() > 1e-9).sum()),
+        "거래횟수": trade_count(result.trades),
         "최종자산": float(result.equity_curve.iloc[-1]),
     }
