@@ -11,12 +11,9 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.data_loader.env import ensure_krx_credentials
+from src.data_loader.env import import_pykrx_stock
 
-# pykrx는 import 시점에 KRX_ID/KRX_PW 환경변수를 읽으므로, 그 전에 .env 값을 넣어준다.
-ensure_krx_credentials()
-
-from pykrx import stock  # noqa: E402
+stock = import_pykrx_stock()
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RAW_DIR = PROJECT_ROOT / "data" / "raw"

@@ -15,11 +15,9 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.data_loader.env import ensure_krx_credentials
+from src.data_loader.env import import_pykrx_stock
 
-ensure_krx_credentials()
-
-from pykrx import stock  # noqa: E402
+stock = import_pykrx_stock()
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PANEL_DIR = PROJECT_ROOT / "data" / "raw" / "panel"

@@ -36,6 +36,40 @@ def get_api_key(name: str) -> str:
     return value
 
 
+def import_pykrx_stock():
+    """
+    pykrx의 stock 모듈을 안전하게 import한다.
+
+    pykrx는 KRX_ID/KRX_PW 환경변수가 있으면 **import 시점에 즉시 로그인을 시도**하고,
+    실패 시 예외를 그대로 던진다. 그런데 KRX는 짧은 시간에 요청이 몰리면 "자동화된
+    비정상 대량조회"로 보고 계정을 일시 차단하는데(이용약관에 명시), 차단된 상태에서는
+    로그인 자체가 매번 실패해서 단순히 import만 해도 프로그램이 죽어버린다(캐시된
+    데이터를 읽기만 하려던 경우도 포함해서).
+
+    그래서 자격증명으로 한 번 시도해보고 실패하면, 환경변수를 지우고 익명 모드로
+    재시도한다. 어차피 OHLCV 같은 기본 데이터는 로그인 없이도 받아진다(네이버 폴백).
+    로그인이 실제로 필요한 함수(get_market_fundamental 등)를 호출하면 그때 가서
+    명확한 에러가 나는 게, 여기서 통째로 죽는 것보다 낫다.
+    """
+    ensure_krx_credentials()
+    try:
+        from pykrx import stock
+
+        return stock
+    except Exception:
+        os.environ.pop("KRX_ID", None)
+        os.environ.pop("KRX_PW", None)
+        import sys
+
+        for name in list(sys.modules):
+            if name == "pykrx" or name.startswith("pykrx."):
+                del sys.modules[name]
+
+        from pykrx import stock
+
+        return stock
+
+
 def ensure_krx_credentials() -> bool:
     """
     pykrx는 KRX 웹사이트 로그인이 있어야 시가총액/PER/PBR/수급/공매도/지수 API를 쓸 수 있고,
