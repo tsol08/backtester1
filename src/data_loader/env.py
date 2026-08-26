@@ -38,51 +38,35 @@ def get_api_key(name: str) -> str:
 
 def import_pykrx_stock():
     """
-    pykrx의 stock 모듈을 안전하게 import한다.
+    pykrx의 stock 모듈을 익명 모드로 import한다.
 
-    pykrx는 KRX_ID/KRX_PW 환경변수가 있으면 **import 시점에 즉시 로그인을 시도**하고,
-    실패 시 예외를 그대로 던진다. 그런데 KRX는 짧은 시간에 요청이 몰리면 "자동화된
-    비정상 대량조회"로 보고 계정을 일시 차단하는데(이용약관에 명시), 차단된 상태에서는
-    로그인 자체가 매번 실패해서 단순히 import만 해도 프로그램이 죽어버린다(캐시된
-    데이터를 읽기만 하려던 경우도 포함해서).
+    설치된 pykrx는 `pykrx.website.comm.webio` 모듈이 import되는 순간
+    (즉 `from pykrx import stock`만 해도) KRX_ID/KRX_PW 환경변수가 있으면
+    **무조건 실제 KRX 로그인 POST 요청을 보낸다** (webio.py 상단의
+    `_session = build_krx_session()`). 이건 OHLCV처럼 로그인이 전혀
+    필요없는 데이터를 캐시에서 읽기만 할 때도 마찬가지로 일어난다.
 
-    그래서 자격증명으로 한 번 시도해보고 실패하면, 환경변수를 지우고 익명 모드로
-    재시도한다. 어차피 OHLCV 같은 기본 데이터는 로그인 없이도 받아진다(네이버 폴백).
-    로그인이 실제로 필요한 함수(get_market_fundamental 등)를 호출하면 그때 가서
-    명확한 에러가 나는 게, 여기서 통째로 죽는 것보다 낫다.
+    문제는 이 로그인이 실패해도 예외를 던지지 않고 내부에서 메시지만
+    찍고 넘어간다는 것이다. 그래서 "로그인 실패 시 익명 재시도"로는
+    이 자동 로그인 요청 자체를 막을 수 없다 — 예외가 안 나니 재시도
+    분기를 탈 일이 없다. 즉 KRX_ID/KRX_PW가 환경변수에 있는 한, pykrx를
+    import할 때마다 KRX 서버로 로그인 요청이 계속 나간다.
+
+    KRX 계정이 "자동화된 비정상 대량조회"로 일시 차단된 상태이므로,
+    이런 반복적인 자동 로그인 시도 자체가 문제다. 그래서 아예 환경변수를
+    비우고 나서 import한다 — pykrx가 로그인을 시도할 대상 자체가 없게
+    만드는 것이다. OHLCV 같은 기본 데이터는 로그인 없이도 네이버 폴백으로
+    받아진다. 로그인이 실제로 필요한 함수(get_market_fundamental 등)는
+    지금 쓰지 않는다 (밴 해제 또는 KRX Open API 승인 전까지 보류).
     """
-    ensure_krx_credentials()
-    try:
-        from pykrx import stock
+    os.environ.pop("KRX_ID", None)
+    os.environ.pop("KRX_PW", None)
+    import sys
 
-        return stock
-    except Exception:
-        os.environ.pop("KRX_ID", None)
-        os.environ.pop("KRX_PW", None)
-        import sys
+    for name in list(sys.modules):
+        if name == "pykrx" or name.startswith("pykrx."):
+            del sys.modules[name]
 
-        for name in list(sys.modules):
-            if name == "pykrx" or name.startswith("pykrx."):
-                del sys.modules[name]
+    from pykrx import stock
 
-        from pykrx import stock
-
-        return stock
-
-
-def ensure_krx_credentials() -> bool:
-    """
-    pykrx는 KRX 웹사이트 로그인이 있어야 시가총액/PER/PBR/수급/공매도/지수 API를 쓸 수 있고,
-    로그인 정보를 KRX_ID / KRX_PW 환경변수에서 읽는다. .env에 저장된 값을 환경변수로 옮겨준다.
-
-    pykrx 모듈을 import 하기 전에 호출해야 한다.
-    """
-    env = load_env()
-    found = True
-    for name in ("KRX_ID", "KRX_PW"):
-        value = os.environ.get(name) or env.get(name)
-        if value:
-            os.environ[name] = value
-        else:
-            found = False
-    return found
+    return stock
