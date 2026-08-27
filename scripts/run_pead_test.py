@@ -27,6 +27,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 import pandas as pd
 
+from config import settings
 from src.data_loader.dart_loader import load_corp_codes, load_fundamentals_bulk
 from src.data_loader.krx_openapi import build_close_panel, build_panel, cached_trading_dates
 from src.data_loader.universe import market_cap_universe_mask
@@ -39,9 +40,9 @@ from src.research.quantile_analysis import (
     summarize_quantiles,
 )
 
-TOP_K = 200
-HORIZON = 20
-N_QUANTILES = 5
+TOP_K = settings.UNIVERSE_TOP_K
+HORIZON = settings.FORWARD_HORIZON
+N_QUANTILES = settings.N_QUANTILES
 MIN_OBS = 30
 DRIFT_WINDOW = 60  # 공시 후 며칠까지 신호로 볼 것인가
 PERIODS_PER_YEAR = 252 / HORIZON

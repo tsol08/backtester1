@@ -1,7 +1,10 @@
-pykrx
 pandas
 numpy
-matplotlib
 pyarrow
-pytest
+requests
 scipy
+pytest
+
+# 거래일 달력 교차검증에만 쓴다 (src/data_loader/krx_panel.py).
+# 데이터 수집은 KRX Open API 정식 채널을 쓰며 pykrx를 사용하지 않는다.
+pykrx

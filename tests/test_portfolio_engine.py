@@ -155,3 +155,47 @@ def test_transaction_tax_rate_follows_schedule():
     rates = CostModel().sell_tax_rate(dates)
 
     assert rates.tolist() == [0.0030, 0.0025, 0.0023, 0.0018]
+
+
+def test_future_prices_do_not_change_past_positions():
+    """
+    룩어헤드 방지의 핵심 검증: t일 이후 가격을 아무리 바꿔도 t일까지의 체결 포지션과
+    수익률은 전혀 달라지면 안 된다. 달라진다면 엔진이 미래를 참조하고 있다는 뜻이다.
+
+    (단일종목 엔진에 있던 이 검증을 포트폴리오 엔진으로 옮겨왔다. 원칙 자체는
+    프로젝트의 근간이므로 엔진이 바뀌어도 계속 지켜져야 한다.)
+    """
+    dates = pd.date_range("2020-01-01", periods=20, freq="B")
+    cutoff = 10
+
+    prices = pd.DataFrame(
+        {"close": [100.0 + i for i in range(len(dates))], "volume": [1_000_000] * len(dates)},
+        index=dates,
+    )
+    signal = pd.Series([i % 2 for i in range(len(dates))], index=dates, dtype=float)
+
+    original = run_portfolio_backtest({"A": prices}, {"A": signal}, CostModel())
+
+    shocked = prices.copy()
+    shocked.iloc[cutoff:, shocked.columns.get_loc("close")] *= 3.0
+    perturbed = run_portfolio_backtest({"A": shocked}, {"A": signal}, CostModel())
+
+    # cutoff 이전 구간은 완전히 동일해야 한다
+    pd.testing.assert_series_equal(
+        original.returns.iloc[:cutoff], perturbed.returns.iloc[:cutoff]
+    )
+    pd.testing.assert_frame_equal(
+        original.weights.iloc[:cutoff], perturbed.weights.iloc[:cutoff]
+    )
+
+
+def test_signal_executes_next_day_not_same_day():
+    """신호가 뜬 당일이 아니라 다음 거래일에 체결돼야 한다 (종가를 보고 그 종가에 살 수 없다)."""
+    dates = pd.date_range("2020-01-01", periods=5, freq="B")
+    prices = _flat_price_df(dates)
+    signal = pd.Series([0, 1, 1, 0, 0], index=dates, dtype=float)
+
+    result = run_portfolio_backtest({"A": prices}, {"A": signal}, CostModel())
+
+    assert result.weights["A"].iloc[1] == 0.0  # 신호 뜬 당일엔 아직 미보유
+    assert result.weights["A"].iloc[2] == 1.0  # 다음 날 체결

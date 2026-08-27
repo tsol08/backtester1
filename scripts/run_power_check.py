@@ -27,14 +27,17 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 import pandas as pd
 
-from config import phase1
-from src.data_loader.krx_openapi import build_close_panel, build_panel
-from src.data_loader.krx_panel import trading_dates
+from config import settings
+from src.data_loader.krx_openapi import (
+    build_close_panel,
+    build_panel,
+    cached_trading_dates,
+)
 from src.data_loader.universe import market_cap_universe_mask
 from src.research.power_analysis import minimum_detectable_ic
 
-TOP_K = 200
-HORIZON = 20
+TOP_K = settings.UNIVERSE_TOP_K
+HORIZON = settings.FORWARD_HORIZON
 N_TRIALS = 150
 CANDIDATE_ICS = [0.01, 0.02, 0.03, 0.05, 0.08, 0.12]
 
@@ -48,8 +51,8 @@ OBSERVED = {
 
 
 def run(label: str, start: str, end: str) -> None:
-    warmup = (pd.Timestamp(start) - pd.Timedelta(400, unit="D")).strftime("%Y-%m-%d")
-    dates = trading_dates(warmup, end)
+    warmup = (pd.Timestamp(start) - pd.Timedelta(settings.WARMUP_DAYS, unit="D")).strftime("%Y-%m-%d")
+    dates = cached_trading_dates(warmup, end)
     eval_dates = dates[dates >= pd.Timestamp(start)]
 
     close = build_close_panel(dates)
@@ -77,8 +80,7 @@ def run(label: str, start: str, end: str) -> None:
 
 
 def main() -> None:
-    run("인샘플", phase1.IN_SAMPLE_START, phase1.IN_SAMPLE_END)
-    run("아웃오브샘플", phase1.OUT_OF_SAMPLE_START, phase1.OUT_OF_SAMPLE_END)
+    run("전체 수집 구간", settings.DATA_START, "2026-08-26")
 
     print("\n" + "=" * 72)
     print("참고: 이 프로젝트에서 실제로 측정된 팩터 IC")
