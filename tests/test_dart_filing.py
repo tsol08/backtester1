@@ -64,6 +64,20 @@ def test_sell_row_becomes_negative():
     assert result.iloc[0]["is_market_trade"]
 
 
+def test_off_market_codes_are_paired():
+    """
+    장외/시간외 코드는 반드시 매수·매도가 쌍으로 들어가야 한다. 한쪽만 넣으면
+    신호가 그 방향으로 인위적으로 기운다(실제로 장외매수를 03으로 잘못 추측해
+    장외매도만 포함됐던 버그가 있었다).
+    """
+    from src.data_loader.dart_filing import MARKET_TRADE_CODES, OPEN_MARKET_CODES
+
+    assert {"11", "12"} <= MARKET_TRADE_CODES  # 장외매수/매도
+    assert {"81", "82"} <= MARKET_TRADE_CODES  # 시간외 매수/매도
+    assert OPEN_MARKET_CODES == {"01", "02"}
+    assert OPEN_MARKET_CODES <= MARKET_TRADE_CODES
+
+
 def test_new_appointment_is_not_a_trade():
     """
     신규선임은 새 임원이 원래 갖고 있던 주식을 처음 신고한 것이다.
@@ -73,6 +87,7 @@ def test_new_appointment_is_not_a_trade():
 
     assert result.iloc[0]["shares_change"] == 300_000.0
     assert not result.iloc[0]["is_market_trade"]
+    assert not result.iloc[0]["is_open_market"]
 
 
 def test_total_row_is_skipped():

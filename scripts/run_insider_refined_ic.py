@@ -35,6 +35,12 @@ from src.data_loader.krx_openapi import build_close_panel, build_panel
 from src.data_loader.krx_panel import trading_dates
 from src.data_loader.universe import fetch_candidate_pool, market_cap_universe_mask
 from src.research.ic_analysis import daily_cross_sectional_ic, summarize_ic
+from src.research.quantile_analysis import (
+    long_only_edge,
+    monotonicity,
+    quantile_forward_returns,
+    summarize_quantiles,
+)
 
 TOP_K = 200
 MIN_OBS = 30
@@ -77,13 +83,17 @@ def main() -> None:
     disclosed = executives[["rcept_no", "disclosed_date", "ticker"]].drop_duplicates("rcept_no")
     detailed = details.merge(disclosed, on="rcept_no", how="inner")
 
-    market_only = detailed[detailed["is_market_trade"]]
-    open_buys = detailed[detailed["reason_code"] == "01"]
-
     signals = {
         "elestock 원본": build_insider_signal(executives, dates, shares, lookback=LOOKBACK),
-        "매매만": build_insider_signal(market_only, dates, shares, lookback=LOOKBACK),
-        "장내매수만": build_insider_signal(open_buys, dates, shares, lookback=LOOKBACK),
+        "장내매매 순매수": build_insider_signal(
+            detailed[detailed["is_open_market"]], dates, shares, lookback=LOOKBACK
+        ),
+        "장외포함 순매수": build_insider_signal(
+            detailed[detailed["is_market_trade"]], dates, shares, lookback=LOOKBACK
+        ),
+        "장내매수만": build_insider_signal(
+            detailed[detailed["reason_code"] == "01"], dates, shares, lookback=LOOKBACK
+        ),
     }
 
     for horizon in HORIZONS:
@@ -104,6 +114,29 @@ def main() -> None:
             pd.DataFrame(rows).set_index("신호")[
                 ["평균 IC", "t-stat", "IC>0 비율", "관측일수", "0아닌종목"]
             ],
+        )
+
+    # 공매도를 하지 않으므로 IC보다 이쪽이 실제로 중요하다:
+    # 상위 분위가 유니버스 평균보다 나은가.
+    print("\n" + "=" * 70)
+    print("롱온리 관점: 상위 분위가 유니버스 평균보다 나은가")
+    print("=" * 70)
+
+    fwd20 = close.pct_change(20).shift(-20)
+    for name, panel in signals.items():
+        qr = quantile_forward_returns(
+            panel.reindex_like(fwd20), fwd20, universe, n_quantiles=5, sample_every=20
+        )
+        if qr.empty:
+            print(f"\n[{name}] 분위 구성 불가")
+            continue
+
+        show(f"[{name}] 분위별 20일 수익률", summarize_quantiles(qr, 252 / 20))
+        edge = long_only_edge(qr, 252 / 20)
+        print(f"  단조성: {monotonicity(qr):.2f}")
+        print(
+            f"  롱온리 초과(상위분위 - 유니버스평균): 연 {edge['상위분위 초과(연율화)']:.2%}"
+            f" (t {edge['상위분위 초과 t-stat']:.2f})"
         )
 
     print(

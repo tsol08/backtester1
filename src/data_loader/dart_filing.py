@@ -36,13 +36,22 @@ FILING_DIR = PROJECT_ROOT / "data" / "raw" / "dart_filing"
 
 REQUEST_INTERVAL = 0.3
 
-# 본인의 매매 판단이 담긴 사유. 나머지(신규선임/최초신고/상여금 등)는 보유량이
-# 바뀌긴 해도 '샀다/팔았다'가 아니므로 신호에서 제외한다.
-MARKET_TRADE_CODES = {
-    "01",  # 장내매수
-    "02",  # 장내매도
-    "03",  # 장외매수
-    "12",  # 장외매도
+# 장내 매매. 시장가로 체결된 자발적 매매라 '내부자가 어떻게 판단했는가'를 가장
+# 깨끗하게 담는다. 신호의 기본 정의로 쓴다.
+OPEN_MARKET_CODES = {
+    "01",  # 장내매수(+)
+    "02",  # 장내매도(-)
+}
+
+# 장외·시간외까지 포함한 넓은 정의. 이쪽은 소수 건이 거대한 물량을 나르는
+# 블록딜 성격이라(장외매수 13건에 1.5억주, 장외매도 25건에 1.8억주) 몇 건이
+# 신호를 좌우할 수 있다. 대주주 지분변동을 분리했던 것과 같은 이유로 기본에서 뺀다.
+#
+# 코드를 반드시 쌍으로 넣을 것. 처음에 장외매수를 03으로 잘못 추측해 넣는 바람에
+# 장외매도(12)만 포함되어, 신호가 인위적으로 매도 쪽으로 기울었던 버그가 있었다.
+MARKET_TRADE_CODES = OPEN_MARKET_CODES | {
+    "11",  # 장외매수(+)
+    "12",  # 장외매도(-)
     "81",  # 시간외매매(+)
     "82",  # 시간외매매(-)
 }
@@ -98,6 +107,7 @@ def parse_detail_rows(document: str) -> pd.DataFrame:
                 else pd.NaT,
                 "shares_change": quantity,
                 "price": _to_number(price.group(1)) if price else float("nan"),
+                "is_open_market": code in OPEN_MARKET_CODES,
                 "is_market_trade": code in MARKET_TRADE_CODES,
             }
         )
@@ -133,6 +143,7 @@ def fetch_filing_details(rcept_no: str) -> pd.DataFrame:
                 "change_date": pd.Series(dtype="datetime64[ns]"),
                 "shares_change": pd.Series(dtype="float64"),
                 "price": pd.Series(dtype="float64"),
+                "is_open_market": pd.Series(dtype="bool"),
                 "is_market_trade": pd.Series(dtype="bool"),
             }
         )
