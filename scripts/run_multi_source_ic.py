@@ -7,7 +7,13 @@
 2) 일별 IC를 그대로 평균내면 t-stat이 심하게 부풀려진다. 겹치지 않게 샘플링하고,
    여러 팩터를 동시에 검정한다는 점(다중검정)도 감안해서 본다
 
-유니버스는 각 시점의 실제 시가총액 상위 종목(point-in-time)으로 제한한다.
+정보원:
+- 가격/거래량 (KRX Open API 일별매매정보)
+- 규모        (같은 API의 시가총액)
+- 밸류에이션  (DART 재무제표 / 시가총액 -- PER/PBR을 직접 주는 API가 없어서 직접 계산)
+- 펀더멘털    (DART 재무제표, 공시일 기준으로 펼침)
+
+유니버스는 각 분기 시작일의 실제 시가총액 상위 200종목(point-in-time)이다.
 """
 from __future__ import annotations
 
@@ -21,94 +27,97 @@ import pandas as pd
 from scipy import stats
 
 from config import phase1
-from src.data_loader.krx_panel import build_panel, trading_dates
-from src.features.multi_source import (
-    build_excess_return_factors,
-    build_price_factors,
-    build_shorting_factors,
-    build_size_factor,
-    build_valuation_factors,
+from src.data_loader.dart_loader import load_fundamentals_bulk
+from src.data_loader.krx_openapi import build_panel
+from src.data_loader.krx_panel import trading_dates
+from src.data_loader.universe import fetch_candidate_pool, market_cap_universe_mask
+from src.features.fundamental import (
+    FACTOR_COLUMNS,
+    VALUATION_LEVEL_COLUMNS,
+    build_fundamental_factors,
+    build_valuation_from_fundamentals,
+    to_daily_factors,
 )
-from src.research.ic_analysis import forward_return, non_overlapping_ic, summarize_ic
+from src.features.multi_source import build_price_factors, build_size_factor
+from src.research.ic_analysis import non_overlapping_ic, summarize_ic
 
 HORIZONS = [20, 60]
 TOP_K = 200
 MIN_OBS = 30
 
 
-def load_universe_mask(dates: pd.DatetimeIndex, columns: pd.Index) -> pd.DataFrame:
-    """분기 스냅샷(시점별 시총 상위)을 일별 마스크로 펼친다."""
-    snapshot_dir = PROJECT_ROOT / "data" / "raw" / "universe_snapshots"
-    frames = [pd.read_parquet(p) for p in sorted(snapshot_dir.glob("*.parquet"))]
-    snapshots = pd.concat(frames)
+def build_fundamental_panels(
+    tickers: list[str], dates: pd.DatetimeIndex
+) -> tuple[dict[str, pd.DataFrame], dict[str, pd.DataFrame]]:
+    """DART 재무제표에서 (펀더멘털 팩터 패널, 밸류에이션 수준값 패널)을 만든다."""
+    raw = load_fundamentals_bulk(tickers, 2016, 2024, verbose=False)
 
-    mask = pd.DataFrame(False, index=dates, columns=columns)
-    rebalance_dates = sorted(snapshots["rebalance_date"].unique())
+    factor_series: dict[str, dict[str, pd.Series]] = {f: {} for f in FACTOR_COLUMNS}
+    level_series: dict[str, dict[str, pd.Series]] = {c: {} for c in VALUATION_LEVEL_COLUMNS}
 
-    for i, rebalance in enumerate(rebalance_dates):
-        members = snapshots.loc[snapshots["rebalance_date"] == rebalance, "ticker"]
-        members = [t for t in members if t in mask.columns]
-        end = rebalance_dates[i + 1] if i + 1 < len(rebalance_dates) else dates.max()
-        window = (mask.index >= rebalance) & (mask.index < end)
-        mask.loc[window, members] = True
+    for ticker, group in raw.groupby("ticker"):
+        computed = build_fundamental_factors(group)
 
-    return mask
+        daily_factors = to_daily_factors(computed, dates)
+        for name in FACTOR_COLUMNS:
+            factor_series[name][ticker] = daily_factors[name]
+
+        daily_levels = to_daily_factors(computed, dates, columns=VALUATION_LEVEL_COLUMNS)
+        for name in VALUATION_LEVEL_COLUMNS:
+            level_series[name][ticker] = daily_levels[name]
+
+    factors = {name: pd.DataFrame(cols) for name, cols in factor_series.items()}
+    levels = {name: pd.DataFrame(cols) for name, cols in level_series.items()}
+    print(f"  DART 재무데이터 확보: {raw['ticker'].nunique()}종목", flush=True)
+    return factors, levels
 
 
 def main() -> None:
     dates = trading_dates(phase1.IN_SAMPLE_START, phase1.IN_SAMPLE_END)
-    print(f"인샘플 거래일 {len(dates)}일", flush=True)
+    print(f"인샘플 거래일 {len(dates)}일 ({phase1.IN_SAMPLE_START} ~ {phase1.IN_SAMPLE_END})", flush=True)
 
-    close = build_panel("ohlcv", "close", dates)
-    volume = build_panel("ohlcv", "volume", dates)
-    print(f"가격 패널: {close.shape[0]}일 x {close.shape[1]}종목", flush=True)
+    close = build_panel("close", dates)
+    volume = build_panel("volume", dates)
+    market_cap = build_panel("market_cap", dates)
+    print(f"가격/시총 패널: {close.shape[0]}일 x {close.shape[1]}종목", flush=True)
+
+    universe = market_cap_universe_mask(market_cap, top_k=TOP_K)
+    print(f"시점별 유니버스: 일별 {universe.sum(axis=1).mean():.0f}종목", flush=True)
 
     factors: dict[str, pd.DataFrame] = {}
     groups: dict[str, str] = {}
 
-    for name, panel in build_price_factors(close, volume).items():
-        factors[name] = panel
-        groups[name] = "가격"
-
-    per = build_panel("valuation", "per", dates)
-    pbr = build_panel("valuation", "pbr", dates)
-    div_yield = build_panel("valuation", "div_yield", dates)
-    if len(per):
-        for name, panel in build_valuation_factors(per, pbr, div_yield).items():
+    def register(group: str, panels: dict[str, pd.DataFrame]) -> None:
+        for name, panel in panels.items():
             factors[name] = panel
-            groups[name] = "밸류에이션"
+            groups[name] = group
 
-    market_cap = build_panel("cap", "market_cap", dates)
-    if len(market_cap):
-        for name, panel in build_size_factor(market_cap).items():
-            factors[name] = panel
-            groups[name] = "규모"
+    register("가격", build_price_factors(close, volume))
+    register("규모", build_size_factor(market_cap))
+    # 시장초과수익 팩터는 제외했다. 시장수익률은 그날 전 종목에 동일한 상수라
+    # 빼도 종목간 순위가 안 바뀌고, 실제로 momentum과 순위상관 1.00이 나왔다.
+    # (build_excess_return_factors docstring 참고)
 
-    short_ratio = build_panel("shorting", "short_ratio", dates)
-    if len(short_ratio):
-        for name, panel in build_shorting_factors(short_ratio).items():
-            factors[name] = panel
-            groups[name] = "공매도"
+    print("DART 재무데이터 로딩 중...", flush=True)
+    candidates = fetch_candidate_pool()["ticker"].tolist()
+    fundamental_panels, level_panels = build_fundamental_panels(candidates, dates)
 
-    index_panel = build_panel("ohlcv", "close", dates)
-    if len(index_panel):
-        # KOSPI 지수는 별도 캐시에서 읽는다
-        index_path = PROJECT_ROOT / "data" / "raw" / "index" / "1001.parquet"
-        if index_path.exists():
-            index_close = pd.read_parquet(index_path)["close"]
-            for name, panel in build_excess_return_factors(close, index_close).items():
-                factors[name] = panel
-                groups[name] = "초과수익"
+    register("펀더멘털", fundamental_panels)
+    register(
+        "밸류에이션",
+        build_valuation_from_fundamentals(
+            level_panels["equity"],
+            level_panels["net_income_ttm"],
+            level_panels["revenue_ttm"],
+            market_cap,
+        ),
+    )
 
     print(f"팩터 {len(factors)}개 준비 완료", flush=True)
 
-    universe = load_universe_mask(dates, close.columns)
-    print(f"시점별 유니버스 평균 종목 수: {universe.sum(axis=1).mean():.0f}", flush=True)
-
     for horizon in HORIZONS:
         print(f"\n===== forward return horizon = {horizon}일 =====")
-        fwd = forward_return(close, horizon) if isinstance(close, pd.Series) else close.pct_change(horizon).shift(-horizon)
-        fwd = fwd.where(universe)
+        fwd = close.pct_change(horizon).shift(-horizon).where(universe)
 
         rows = []
         for name, panel in factors.items():
@@ -126,6 +135,12 @@ def main() -> None:
 
         threshold = stats.norm.ppf(1 - 0.05 / (2 * len(rows)))
         print(f"  팩터 {len(rows)}개 동시검정 -> Bonferroni 보정 임계값 |t| > {threshold:.2f}")
+
+    print(
+        "\n주의: 유니버스 자체는 시점별 시가총액으로 구성해 생존편향이 없지만, "
+        "펀더멘털/밸류에이션 팩터는 '현재' 시총 상위에서 뽑은 후보군의 DART 데이터만 "
+        "있어서 그 부분에는 생존편향이 남아있다."
+    )
 
 
 if __name__ == "__main__":

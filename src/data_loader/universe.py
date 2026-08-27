@@ -6,12 +6,14 @@
 1) 후보군(candidate pool): 네이버 시가총액 순위 상위 N종목.
    **알려진 한계**: 이건 '오늘' 기준 순위라 생존편향(survivorship bias)이 있다.
    과거에 컸지만 상장폐지된 종목이 빠져 있어서, 과거 성과가 낙관적으로 나올 수 있다.
-   시점별 정확한 시가총액을 얻으려면 KRX 데이터가 필요한데 이 환경에서는 막혀 있다.
+   DART 재무데이터가 후보군 단위로 수집돼 있어 아직 쓰이는 경로다.
 
-2) 시점별 유니버스(point-in-time): 각 날짜마다 "그 시점까지의 거래대금" 상위 K종목만 사용.
-   거래대금은 그 시점의 가격·거래량만으로 계산되므로 미래 정보가 들어가지 않는다.
-   이렇게 하면 "2018년엔 소형주였는데 나중에 커진 종목"이 2018년 유니버스에 잘못
-   포함되는 문제를 막을 수 있다 (후보군 자체의 생존편향은 남는다).
+2) 시점별 유니버스(point-in-time): 각 날짜마다 그 시점의 실제 시가총액 상위 K종목.
+   KRX Open API로 받은 일자별 전종목 시가총액을 쓰므로 후보군을 거치지 않고,
+   그 시점에 상장돼 있던 종목이 그대로 들어간다 — 생존편향이 없다.
+
+3) point_in_time_universe: 거래대금 기반의 대안. 시가총액 데이터 없이 가격·거래량만으로
+   유니버스를 정할 때 쓴다.
 """
 from __future__ import annotations
 
@@ -110,7 +112,7 @@ def build_universe_snapshots(
 
     반환: (rebalance_date, ticker) 목록
     """
-    from src.data_loader.krx_extra import load_all_market_cap
+    from src.data_loader.krx_openapi import fetch_daily_trading
 
     frames = []
     for date in pd.DatetimeIndex(dates):
@@ -119,7 +121,7 @@ def build_universe_snapshots(
             frames.append(pd.read_parquet(path))
             continue
 
-        snapshot = load_all_market_cap(date.strftime("%Y%m%d"))
+        snapshot = fetch_daily_trading(date)
         snapshot = snapshot[snapshot["market_cap"] > 0]
         top = snapshot.nlargest(top_k, "market_cap")
 
@@ -135,6 +137,44 @@ def build_universe_snapshots(
         frames.append(result)
 
     return pd.concat(frames, ignore_index=True)
+
+
+def market_cap_universe_mask(
+    market_cap: pd.DataFrame, top_k: int = 200, rebalance: str = "QS"
+) -> pd.DataFrame:
+    """
+    시가총액 패널에서 직접 시점별 유니버스 마스크를 만든다.
+
+    분기 시작일마다 그 날 관측된 시가총액 상위 top_k를 뽑고, 다음 리밸런싱까지
+    그 구성을 유지한다. 편입 판단에 쓰는 시총이 '그 날의' 값이므로 미래 정보가
+    들어가지 않고, 그 시점에 상장돼 있던 종목만 후보가 되므로 생존편향도 없다.
+
+    매일 상위 K를 다시 뽑지 않는 이유: 시총이 경계선에서 흔들리는 종목이 유니버스를
+    들락날락하면 팩터 값이 그때마다 끊겨 IC가 왜곡된다. 실제 운용에서도 분기 리밸런싱이
+    일반적이다.
+    """
+    mask = pd.DataFrame(False, index=market_cap.index, columns=market_cap.columns)
+
+    rebalance_dates = (
+        market_cap.groupby(market_cap.index.to_period(rebalance[0])).apply(
+            lambda g: g.index[0]
+        )
+    ).tolist()
+
+    for i, start in enumerate(rebalance_dates):
+        end = rebalance_dates[i + 1] if i + 1 < len(rebalance_dates) else None
+        snapshot = market_cap.loc[start].dropna()
+        snapshot = snapshot[snapshot > 0]
+        if snapshot.empty:
+            continue
+
+        members = snapshot.nlargest(top_k).index
+        window = mask.index >= start
+        if end is not None:
+            window &= mask.index < end
+        mask.loc[window, members] = True
+
+    return mask
 
 
 def point_in_time_universe(

@@ -77,8 +77,16 @@ def build_excess_return_factors(
     close: pd.DataFrame, index_close: pd.Series
 ) -> dict[str, pd.DataFrame]:
     """
-    시장 대비 초과수익. 개별 종목 수익률에서 시장 수익률을 빼면, 시장 전체가 움직여서
-    생긴 부분을 걷어내고 그 종목 고유의 움직임만 남는다.
+    시장 대비 초과수익. 개별 종목 수익률에서 시장 수익률을 뺀다.
+
+    **cross-sectional 팩터로는 쓰지 말 것.** 실측 결과 momentum_20과 순위상관이
+    정확히 1.00, momentum_60과 0.99로 나왔다. 당연한 결과다 — 시장수익률은 그날
+    모든 종목에 대해 같은 값이라, 빼봐야 전 종목이 같은 상수만큼 이동할 뿐이고
+    종목간 '순위'는 전혀 바뀌지 않는다. IC는 순위상관이므로 결과가 동일하다.
+
+    시장조정이 의미를 갖는 건 시계열 신호("이 종목이 시장보다 나은가")를 볼 때이지,
+    같은 날 종목들을 줄세우는 cross-sectional 분석에서는 아니다. IC 검정에 넣으면
+    독립 팩터가 하나 늘어난 것처럼 보여서 다중검정 보정만 부당하게 엄격해진다.
     """
     stock_return = close.pct_change()
     market_return = index_close.reindex(close.index).pct_change()
