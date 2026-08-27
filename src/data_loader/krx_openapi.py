@@ -26,7 +26,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 OPENAPI_DIR = PROJECT_ROOT / "data" / "raw" / "openapi"
 
 BASE_URL = "http://data-dbg.krx.co.kr/svc/apis"
-REQUEST_INTERVAL = 0.2
+# 0.2초 간격으로 80분 넘게 쉬지 않고 돌리면 DNS 조회 자체가 실패하기 시작하는
+# 패턴이 두 번 반복 관측됐다(연속 요청량에 따른 일시적 제한으로 추정). 간격을
+# 늘려 연속 요청 부담을 줄인다.
+REQUEST_INTERVAL = 0.5
 
 TRADING_ENDPOINTS = {
     "KOSPI": "sto/stk_bydd_trd",
