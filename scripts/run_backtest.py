@@ -106,6 +106,8 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--strategy", default="pead", choices=sorted(STRATEGIES))
     parser.add_argument("--end", default=None, help="평가 종료일 (기본: 수집된 마지막 날)")
+    parser.add_argument("--top-k", type=int, default=settings.UNIVERSE_TOP_K,
+                        help="유니버스 크기 (시총 상위 N종목)")
     parser.add_argument("--capital", type=float, default=settings.INITIAL_CAPITAL / 1e4,
                         help="초기자본, 만원 단위 (기본 10000 = 1억)")
     args = parser.parse_args()
@@ -116,7 +118,7 @@ def main() -> None:
     # 구간을 잘라 싣지 않는다. 리밸런싱 격자가 앵커(2018-01-02) 기준이라 패널을
     # 어디서부터 실어도 같은 날짜에 갈아타지만, 성과 비교의 출발점이 달라지면
     # 벤치마크와 어긋난다. 부분 구간은 아래 연도별 표로 본다.
-    panels = Panels.load(end=args.end)
+    panels = Panels.load(end=args.end, top_k=args.top_k)
 
     strategy = STRATEGIES[args.strategy]()
     benchmark = EqualWeightUniverse()

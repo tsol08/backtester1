@@ -53,6 +53,8 @@ def ticker_names() -> pd.Series:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--strategy", default="pead", choices=sorted(STRATEGIES))
+    parser.add_argument("--top-k", type=int, default=settings.UNIVERSE_TOP_K,
+                        help="유니버스 크기 (시총 상위 N종목)")
     parser.add_argument("--capital", type=float, default=settings.INITIAL_CAPITAL / 1e4,
                         help="투자금, 만원 단위 (기본 10000 = 1억)")
     parser.add_argument("--no-record", action="store_true", help="기록을 남기지 않는다")
@@ -61,7 +63,7 @@ def main() -> None:
     capital = args.capital * 1e4
 
     print("데이터 로딩...", flush=True)
-    panels = Panels.load()
+    panels = Panels.load(top_k=args.top_k)
     strategy = STRATEGIES[args.strategy]()
     strategy.prepare(panels)
 

@@ -31,7 +31,7 @@ from src.data_loader.dart_loader import load_corp_codes, load_fundamentals_bulk
 from src.data_loader.krx_openapi import build_panel, cached_trading_dates
 from src.data_loader.universe import market_cap_universe_mask
 
-TOP_K = 200
+DEFAULT_TOP_K = 200
 START_YEAR = 2015
 UNIVERSE_START = "2015-01-01"
 
@@ -43,21 +43,27 @@ def collection_range() -> tuple[int, int]:
     return START_YEAR, pd.Timestamp.today().year
 
 
+def universe_size() -> int:
+    """세 번째 인자로 유니버스 크기. 상위 500위 검정을 위해 넓힐 때 쓴다."""
+    return int(sys.argv[3]) if len(sys.argv) >= 4 else DEFAULT_TOP_K
+
+
 def main() -> None:
     start_year, end_year = collection_range()
+    top_k = universe_size()
     dates = cached_trading_dates(UNIVERSE_START, f"{end_year}-12-31")
     if len(dates) == 0:
         print("가격 패널이 없다. collect_openapi_panel.py를 먼저 실행할 것.")
         return
 
     market_cap = build_panel("market_cap", dates)
-    universe = market_cap_universe_mask(market_cap, top_k=TOP_K)
+    universe = market_cap_universe_mask(market_cap, top_k=top_k)
     members = sorted(universe.columns[universe.any(axis=0)])
 
     dart_codes = set(load_corp_codes()["stock_code"])
     tickers = [t for t in members if t in dart_codes]
 
-    print(f"시점별 상위{TOP_K}에 편입된 적 있는 종목: {len(members)}개")
+    print(f"시점별 상위{top_k}에 편입된 적 있는 종목: {len(members)}개")
     print(f"  그중 DART 고유번호 보유: {len(tickers)}개")
     print(f"수집 범위: {start_year}~{end_year}년", flush=True)
 
