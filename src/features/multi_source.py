@@ -98,23 +98,28 @@ def build_excess_return_factors(
     }
 
 
-def neutralize_by_size(factor: pd.DataFrame, log_market_cap: pd.DataFrame) -> pd.DataFrame:
+def neutralize(factor: pd.DataFrame, control: pd.DataFrame, min_obs: int = 30) -> pd.DataFrame:
     """
-    팩터에서 규모(시가총액) 효과를 제거한다.
+    팩터에서 control로 설명되는 부분을 제거하고 잔차만 남긴다.
 
-    많은 팩터가 사실은 '소형주라서' 생기는 효과를 반영할 뿐일 수 있다. 각 날짜마다
-    팩터를 시가총액에 회귀시키고 잔차만 남기면, 규모로 설명되지 않는 고유 정보만 남는다.
+    "이 팩터가 사실은 다른 것의 대리변수 아닌가"를 확인하는 도구다. 각 날짜마다
+    팩터를 control에 회귀시키고 잔차를 취하면, control로 설명되지 않는 고유 정보만
+    남는다. 잔차의 IC가 원본과 비슷하면 그 팩터는 독립적인 정보를 담고 있는 것이고,
+    확 줄어들면 사실상 control을 다르게 잰 것이었다는 뜻이다.
+
+    예: 변동성을 시가총액으로 중립화 -> '소형주 효과'인지 확인
+        변동성을 베타로 중립화       -> '저베타(시장방어) 효과'인지 확인
     """
     result = pd.DataFrame(index=factor.index, columns=factor.columns, dtype=float)
 
     for date in factor.index:
         y = factor.loc[date]
-        x = log_market_cap.loc[date] if date in log_market_cap.index else None
+        x = control.loc[date] if date in control.index else None
         if x is None:
             continue
 
         valid = y.notna() & x.notna()
-        if valid.sum() < 30:
+        if valid.sum() < min_obs:
             continue
 
         y_valid = y[valid]
@@ -123,3 +128,26 @@ def neutralize_by_size(factor: pd.DataFrame, log_market_cap: pd.DataFrame) -> pd
         result.loc[date, valid[valid].index] = y_valid - (slope * x_valid + intercept)
 
     return result
+
+
+def neutralize_by_size(factor: pd.DataFrame, log_market_cap: pd.DataFrame) -> pd.DataFrame:
+    """팩터에서 규모(시가총액) 효과를 제거한다. neutralize의 규모 전용 별칭."""
+    return neutralize(factor, log_market_cap)
+
+
+def rolling_beta(
+    close: pd.DataFrame, market_index: pd.Series, window: int = 60
+) -> pd.DataFrame:
+    """
+    종목별 시장 베타 (rolling 공분산 / 시장 분산).
+
+    저변동성 팩터가 사실은 '저베타 = 시장이 빠질 때 덜 빠짐'에 불과한지 확인하는 데 쓴다.
+    변동성이 낮은 종목은 대개 베타도 낮으므로, 둘을 구분하지 않으면 cross-sectional
+    알파를 찾은 게 아니라 시장 방향에 베팅한 것을 알파로 착각할 수 있다.
+    """
+    stock_return = close.pct_change()
+    market_return = market_index.reindex(close.index).pct_change()
+
+    covariance = stock_return.rolling(window).cov(market_return)
+    market_variance = market_return.rolling(window).var()
+    return covariance.div(market_variance, axis=0)
