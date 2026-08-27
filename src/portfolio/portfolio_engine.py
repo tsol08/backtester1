@@ -88,7 +88,11 @@ def run_portfolio_backtest(
         df = price_by_ticker[t].reindex(index)
         cost_rate[t] = cost_model.total_cost_rate(df, order_value[t])
 
-    cost_drag = (cost_rate * weight_change.abs()).sum(axis=1)
+    # 증권거래세는 매도할 때만 붙으므로, 비중이 줄어든 부분(음의 변화)에만 적용한다.
+    sell_weight = (-weight_change).clip(lower=0.0)
+    tax_drag = sell_weight.sum(axis=1) * cost_model.sell_tax_rate(index)
+
+    cost_drag = (cost_rate * weight_change.abs()).sum(axis=1) + tax_drag
 
     gross_return = (weights * daily_returns).sum(axis=1)
     net_return = gross_return - cost_drag

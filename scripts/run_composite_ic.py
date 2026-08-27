@@ -29,7 +29,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import pandas as pd
 
 from config import phase1
-from src.data_loader.krx_openapi import build_panel
+from src.data_loader.krx_openapi import build_close_panel, build_panel
 from src.data_loader.krx_panel import trading_dates
 from src.data_loader.universe import market_cap_universe_mask
 from src.features.multi_source import build_price_factors
@@ -60,7 +60,7 @@ def load_with_warmup(start: str, end: str) -> tuple[pd.DataFrame, ...]:
     dates = trading_dates(warmup_start, end)
     eval_dates = dates[dates >= pd.Timestamp(start)]
 
-    close = build_panel("close", dates)
+    close = build_close_panel(dates)
     volume = build_panel("volume", dates)
     market_cap = build_panel("market_cap", dates)
     universe = market_cap_universe_mask(market_cap, top_k=TOP_K)

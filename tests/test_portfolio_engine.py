@@ -12,6 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 import pandas as pd
+import pytest
 
 from src.costs.cost_model import CostModel
 from src.portfolio.portfolio_engine import run_portfolio_backtest
@@ -123,3 +124,34 @@ def test_fixed_position_size_caps_when_too_many_active():
     assert result.trades.loc[dates[3], "A"] < 0
     # 반대로 캡이 안 걸리는 구간(day1->day2)에서는 A의 비중이 그대로 유지돼야 한다.
     assert result.trades.loc[dates[2], "A"] == 0.0
+
+
+def test_transaction_tax_charged_on_sells_only():
+    """증권거래세는 매도분에만 붙어야 한다 (매수만 하는 날엔 세금 0)."""
+    dates = pd.date_range("2024-01-01", periods=4, freq="B")
+
+    price_by_ticker = {"A": _flat_price_df(dates)}
+    # position = signal.shift(1) -> 비중 [0, 1, 1, 0]. day1에 매수, day3에 매도.
+    signal_by_ticker = {"A": pd.Series([1, 1, 0, 0], index=dates, dtype=float)}
+
+    taxed = run_portfolio_backtest(price_by_ticker, signal_by_ticker, CostModel())
+    untaxed = run_portfolio_backtest(
+        price_by_ticker, signal_by_ticker, CostModel(apply_transaction_tax=False)
+    )
+
+    # 매수만 일어난 day1은 두 경우의 비용이 같아야 한다
+    assert taxed.cost_paid.loc[dates[1]] == pytest.approx(untaxed.cost_paid.loc[dates[1]])
+
+    # 매도가 일어난 day3에는 세금만큼 비용이 더 커야 한다.
+    # 2024년 세율 0.18%, 매도 비중 1.0, 자본 1억 -> 18만원
+    extra = taxed.cost_paid.loc[dates[3]] - untaxed.cost_paid.loc[dates[3]]
+    assert extra == pytest.approx(0.0018 * 1.0 * 100_000_000)
+
+
+def test_transaction_tax_rate_follows_schedule():
+    """세율이 시행일 기준으로 바뀌어야 한다 (2018년 0.30% -> 2024년 0.18%)."""
+    dates = pd.to_datetime(["2018-06-01", "2019-06-03", "2021-01-04", "2024-01-02"])
+
+    rates = CostModel().sell_tax_rate(dates)
+
+    assert rates.tolist() == [0.0030, 0.0025, 0.0023, 0.0018]

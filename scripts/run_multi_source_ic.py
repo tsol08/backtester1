@@ -28,7 +28,7 @@ from scipy import stats
 
 from config import phase1
 from src.data_loader.dart_loader import load_fundamentals_bulk
-from src.data_loader.krx_openapi import build_panel
+from src.data_loader.krx_openapi import build_close_panel, build_panel
 from src.data_loader.krx_panel import trading_dates
 from src.data_loader.universe import fetch_candidate_pool, market_cap_universe_mask
 from src.features.fundamental import (
@@ -76,7 +76,7 @@ def main() -> None:
     dates = trading_dates(phase1.IN_SAMPLE_START, phase1.IN_SAMPLE_END)
     print(f"인샘플 거래일 {len(dates)}일 ({phase1.IN_SAMPLE_START} ~ {phase1.IN_SAMPLE_END})", flush=True)
 
-    close = build_panel("close", dates)
+    close = build_close_panel(dates)
     volume = build_panel("volume", dates)
     market_cap = build_panel("market_cap", dates)
     print(f"가격/시총 패널: {close.shape[0]}일 x {close.shape[1]}종목", flush=True)

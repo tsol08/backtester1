@@ -135,6 +135,19 @@ def fetch_base_info(force_refresh: bool = False) -> pd.DataFrame:
     return result
 
 
+def build_close_panel(dates: pd.DatetimeIndex) -> pd.DataFrame:
+    """
+    기업행위가 보정된 종가 패널.
+
+    분석 코드는 이걸 써야 한다. build_panel("close", ...)은 Open API 원본 종가라
+    액면분할이 -98% 수익률로 잡힌다(삼성전자 2018-05-04 등). 자세한 내용은
+    src/data_loader/price_adjust.py 참고.
+    """
+    from src.data_loader.price_adjust import load_adjusted_close
+
+    return load_adjusted_close(build_panel("close", dates), build_panel("listed_shares", dates))
+
+
 def build_panel(column: str, dates: pd.DatetimeIndex) -> pd.DataFrame:
     """캐시된 날짜별 거래 데이터를 (날짜 x 종목) 패널로 조립한다."""
     rows = {}
