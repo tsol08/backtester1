@@ -81,3 +81,20 @@ def test_split_survives_masking():
     result = load_adjusted_close(close, shares)
 
     assert result["A"].notna().all()
+
+
+def test_cached_trading_dates_matches_pykrx_calendar():
+    """
+    패널에서 유도한 거래일이 pykrx 기준 달력과 일치해야 한다.
+
+    2014년 이전은 pykrx(네이버 폴백)가 데이터를 주지 않아 패널 유도 방식을 써야 하는데,
+    겹치는 구간에서 두 방식이 어긋나면 그 방식을 신뢰할 수 없다.
+    """
+    from src.data_loader.krx_openapi import cached_trading_dates
+    from src.data_loader.krx_panel import trading_dates
+
+    derived = cached_trading_dates("2018-01-01", "2018-12-31")
+    reference = trading_dates("2018-01-01", "2018-12-31")
+
+    assert len(derived) > 200  # 데이터가 없어서 우연히 통과하는 것 방지
+    assert derived.equals(reference)

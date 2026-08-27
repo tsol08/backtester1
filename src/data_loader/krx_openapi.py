@@ -135,6 +135,30 @@ def fetch_base_info(force_refresh: bool = False) -> pd.DataFrame:
     return result
 
 
+def cached_trading_dates(start: str, end: str) -> pd.DatetimeIndex:
+    """
+    수집된 패널에서 거래일을 유도한다.
+
+    krx_panel.trading_dates는 삼성전자 OHLCV 캐시(pykrx 경유)를 달력으로 쓰는데,
+    pykrx의 네이버 폴백이 2014년 중반까지만 데이터를 준다. 그 이전 구간은 이 함수를
+    써야 한다 — Open API는 2010년부터 제공하고, 휴장일에는 빈 응답을 주므로
+    '내용이 있는 파일이 존재하는 날짜'가 곧 거래일이다.
+    """
+    directory = OPENAPI_DIR / "trading"
+    if not directory.exists():
+        return pd.DatetimeIndex([])
+
+    start_ts, end_ts = pd.Timestamp(start), pd.Timestamp(end)
+    dates = []
+    for path in sorted(directory.glob("*.parquet")):
+        date = pd.Timestamp(path.stem)
+        if start_ts <= date <= end_ts and path.stat().st_size > 0:
+            if len(pd.read_parquet(path, columns=["market"])):
+                dates.append(date)
+
+    return pd.DatetimeIndex(dates)
+
+
 def build_close_panel(dates: pd.DatetimeIndex) -> pd.DataFrame:
     """
     기업행위가 보정된 종가 패널.
