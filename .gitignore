@@ -22,3 +22,4 @@ data/processed/
 .vscode/
 .idea/
 data/processed/live/
+data/raw/
