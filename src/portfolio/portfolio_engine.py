@@ -61,7 +61,10 @@ def run_portfolio_backtest(
         df = price_by_ticker[t].reindex(index)
         signal = signal_by_ticker[t].reindex(index).fillna(0.0)
         positions[t] = signal.shift(1).fillna(0.0)
-        daily_returns[t] = df["close"].pct_change().fillna(0.0)
+        # 거래정지 등으로 종가가 비는 날은 수익률 0으로 두고, 재개된 날 그동안의 변동을
+        # 한꺼번에 인식한다(ffill 후 변화율). 구멍을 그냥 NaN으로 두면 재개일의 움직임까지
+        # 통째로 사라져서 정지 기간의 손익이 없던 일이 된다.
+        daily_returns[t] = df["close"].ffill().pct_change(fill_method=None).fillna(0.0)
 
     if position_size is None:
         n_active = (positions > 0).sum(axis=1)

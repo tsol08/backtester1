@@ -46,6 +46,12 @@ def transaction_tax_rate(dates: pd.DatetimeIndex) -> pd.Series:
     return merged.set_index("date")["rate"].reindex(dates)
 
 
+# 참여율(주문금액/평균거래대금)의 상한. 1.0은 "하루 평균 거래대금 전부를 내가 낸다"는
+# 뜻이고, 그 이상은 모델이 아는 바가 없다. 상한에 닿으면 충격비용이 impact_coefficient
+# 그대로(기본 10%)라 사실상 매매 불가에 가까운 벌점이 된다.
+MAX_PARTICIPATION = 1.0
+
+
 @dataclass
 class CostModel:
     commission_rate: float = 0.00015  # 편도 수수료율
@@ -61,12 +67,32 @@ class CostModel:
         return transaction_tax_rate(pd.DatetimeIndex(dates))
 
     def average_trading_value(self, df: pd.DataFrame) -> pd.Series:
+        """
+        최근 impact_window일 평균 거래대금.
+
+        min_periods=1인 이유: 이력이 짧으면 NaN이 되고, NaN 참여율은 아래에서 0으로
+        해석되어 **거래가 공짜가 된다**. 추정치가 거칠더라도 있는 자료로 재는 편이
+        "모르니까 비용 0"보다 낫다.
+        """
         trading_value = df["close"] * df["volume"]
-        return trading_value.rolling(self.impact_window).mean()
+        return trading_value.rolling(self.impact_window, min_periods=1).mean()
+
+    def participation_rate(self, df: pd.DataFrame, order_value: pd.Series) -> pd.Series:
+        """
+        주문금액 / 평균거래대금. MAX_PARTICIPATION에서 잘린다.
+
+        거래정지 종목은 평균거래대금이 0이라 참여율이 무한대가 된다(지주사 전환·인적분할·
+        회생절차 등으로 실제로 발생한다). 상한이 없으면 그런 하루가 백테스트 전체를
+        -inf로 만들면서도 예외 없이 조용히 지나간다.
+        """
+        avg_value = self.average_trading_value(df)
+        rate = order_value.abs() / avg_value.where(avg_value > 0)
+        rate = rate.replace([np.inf, -np.inf], np.nan)
+        # 거래대금을 알 수 없는 날은 '거래 불가'로 본다. 실제로 주문이 없는 날이라면
+        # 비용이 주문금액에 곱해지므로 결과에 영향이 없다.
+        return rate.fillna(MAX_PARTICIPATION).clip(lower=0.0, upper=MAX_PARTICIPATION)
 
     def total_cost_rate(self, df: pd.DataFrame, order_value: pd.Series) -> pd.Series:
         """order_value(원화, 매매 시점의 주문금액 절댓값) 대비 총 거래비용 비율."""
-        avg_value = self.average_trading_value(df)
-        participation = (order_value.abs() / avg_value).clip(lower=0).fillna(0.0)
-        impact = self.impact_coefficient * np.sqrt(participation)
+        impact = self.impact_coefficient * np.sqrt(self.participation_rate(df, order_value))
         return self.commission_rate + self.slippage_rate + impact
