@@ -89,21 +89,24 @@ def main() -> None:
         for name, panel in signals.items():
             aligned = panel.reindex_like(fwd).where(universe).astype(float)
 
-            # 내부자 거래가 아예 없는 종목은 0이 되는데, 이걸 '중립'으로 두면
-            # 대다수가 0인 날에는 순위가 사실상 무의미해진다. 실제로 신호가 있는
-            # 종목이 얼마나 되는지 같이 본다.
-            nonzero = (aligned != 0).sum(axis=1)
-
+            # 내부자 거래 이력이 아예 없는 종목은 NaN(순위에서 제외)이고, 이력은
+            # 있지만 최근 윈도우에 거래가 없으면 0이다. 0이 대다수면 순위가 동점
+            # 투성이가 되어 IC의 검정력이 떨어지므로, 실제로 값이 움직이는 종목이
+            # 몇 개인지 같이 봐야 결과를 해석할 수 있다.
+            # (NaN != 0 은 True라서, 결측을 먼저 걸러내지 않으면 전부 유효로 잡힌다.)
+            has_data = aligned.notna()
             ic = daily_cross_sectional_ic(aligned, fwd, min_obs=MIN_OBS).iloc[::horizon]
+
             summary = summarize_ic(ic)
             summary["신호"] = name
-            summary["일평균 유효종목"] = nonzero.mean()
+            summary["신호보유"] = has_data.sum(axis=1).mean()
+            summary["0아닌종목"] = (has_data & (aligned != 0)).sum(axis=1).mean()
             rows.append(summary)
 
         show(
             f"[forward return {horizon}일]",
             pd.DataFrame(rows).set_index("신호")[
-                ["평균 IC", "t-stat", "IC>0 비율", "관측일수", "일평균 유효종목"]
+                ["평균 IC", "t-stat", "IC>0 비율", "관측일수", "신호보유", "0아닌종목"]
             ],
         )
 

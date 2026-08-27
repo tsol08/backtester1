@@ -98,7 +98,9 @@ def build_excess_return_factors(
     }
 
 
-def neutralize(factor: pd.DataFrame, control: pd.DataFrame, min_obs: int = 30) -> pd.DataFrame:
+def neutralize(
+    factor: pd.DataFrame, control: pd.DataFrame, min_obs: int = 30, use_ranks: bool = True
+) -> pd.DataFrame:
     """
     팩터에서 control로 설명되는 부분을 제거하고 잔차만 남긴다.
 
@@ -109,7 +111,17 @@ def neutralize(factor: pd.DataFrame, control: pd.DataFrame, min_obs: int = 30) -
 
     예: 변동성을 시가총액으로 중립화 -> '소형주 효과'인지 확인
         변동성을 베타로 중립화       -> '저베타(시장방어) 효과'인지 확인
+
+    use_ranks=True(기본)면 회귀 전에 양쪽을 그날의 백분위 순위로 바꾼다. 원본값에
+    그냥 회귀하면 **이상치 하나가 기울기를 통째로 좌우**한다. 내부자 순매수처럼
+    소수 종목에 극단적으로 쏠린 팩터에서는, 실제 순위상관이 0.08에 불과한데도
+    중립화 후 IC 부호가 뒤집히는 일이 실제로 벌어졌다. 게다가 우리가 재는 IC 자체가
+    순위상관이므로, 중립화도 순위 기준으로 해야 앞뒤가 맞는다.
     """
+    if use_ranks:
+        factor = factor.rank(axis=1, pct=True)
+        control = control.rank(axis=1, pct=True)
+
     result = pd.DataFrame(index=factor.index, columns=factor.columns, dtype=float)
 
     for date in factor.index:
