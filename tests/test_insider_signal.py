@@ -77,3 +77,52 @@ def test_future_disclosure_does_not_change_past_signal():
     after = build_insider_signal(with_future, DATES, _shares(), lookback=3)
 
     pd.testing.assert_series_equal(before["A"].iloc[:7], after["A"].iloc[:7])
+
+
+def test_archive_keeps_records_that_fell_out_of_api_window():
+    """
+    API는 2년 롤링 윈도우라 오래된 공시가 응답에서 빠진다. 아카이브는 그걸
+    보존해야 한다 - 안 그러면 아무리 오래 수집해도 표본이 2년에 고정된다.
+    """
+    from src.data_loader.dart_insider import merge_archive
+
+    old = pd.DataFrame(
+        {
+            "rcept_no": ["A1", "A2"],
+            "disclosed_date": pd.to_datetime(["2024-09-01", "2025-01-01"]),
+            "shares_change": [100.0, 200.0],
+        }
+    )
+    # 윈도우가 밀려서 A1은 빠지고 A3가 새로 들어온 응답
+    fetched = pd.DataFrame(
+        {
+            "rcept_no": ["A2", "A3"],
+            "disclosed_date": pd.to_datetime(["2025-01-01", "2026-06-01"]),
+            "shares_change": [200.0, 300.0],
+        }
+    )
+
+    merged = merge_archive(old, fetched)
+
+    assert set(merged["rcept_no"]) == {"A1", "A2", "A3"}
+    assert len(merged) == 3
+
+
+def test_archive_prefers_corrected_disclosure():
+    """접수번호가 같으면 새로 받은 값이 이긴다 (정정공시 반영)."""
+    from src.data_loader.dart_insider import merge_archive
+
+    old = pd.DataFrame(
+        {
+            "rcept_no": ["A1"],
+            "disclosed_date": pd.to_datetime(["2025-01-01"]),
+            "shares_change": [100.0],
+        }
+    )
+    fetched = old.copy()
+    fetched["shares_change"] = [150.0]
+
+    merged = merge_archive(old, fetched)
+
+    assert len(merged) == 1
+    assert merged["shares_change"].iloc[0] == 150.0

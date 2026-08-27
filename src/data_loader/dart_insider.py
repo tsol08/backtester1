@@ -58,10 +58,20 @@ def _to_number(series: pd.Series) -> pd.Series:
     return pd.to_numeric(cleaned, errors="coerce")
 
 
-def fetch_insider_trades(ticker: str, corp_code: str, force_refresh: bool = False) -> pd.DataFrame:
-    """한 종목의 임원·주요주주 소유변동 내역 전체."""
+def fetch_insider_trades(ticker: str, corp_code: str, refresh: bool = False) -> pd.DataFrame:
+    """
+    한 종목의 임원·주요주주 소유변동 내역.
+
+    refresh=True면 API를 다시 호출해 **기존 캐시와 합친다(덮어쓰지 않는다)**.
+    이 API는 오늘 기준 정확히 2년치만 주는 롤링 윈도우다(730일로 확인). 덮어쓰면
+    윈도우 밖으로 밀려난 과거 기록이 영구히 사라지고, 아무리 오래 수집해도 표본이
+    2년에 고정된다. 반대로 합쳐 나가면 로컬 캐시가 아카이브가 되어 시간이 갈수록
+    검정력이 올라간다 — 이 신호를 나중에 진짜로 검증할 수 있는 유일한 경로다.
+
+    중복 제거는 rcept_no(접수번호) 기준이다. 공시 하나를 유일하게 식별한다.
+    """
     path = _path(ticker)
-    if path.exists() and not force_refresh:
+    if path.exists() and not refresh:
         return pd.read_parquet(path)
 
     response = requests.get(
@@ -100,9 +110,28 @@ def fetch_insider_trades(ticker: str, corp_code: str, force_refresh: bool = Fals
             }
         )
 
+    if path.exists():
+        result = merge_archive(pd.read_parquet(path), result)
+
     path.parent.mkdir(parents=True, exist_ok=True)
     result.to_parquet(path)
     return result
+
+
+def merge_archive(existing: pd.DataFrame, fetched: pd.DataFrame) -> pd.DataFrame:
+    """
+    기존 아카이브에 새로 받은 내역을 합친다. 접수번호가 같으면 새 쪽을 남긴다
+    (정정공시 반영). 어느 쪽에만 있는 기록도 모두 보존된다.
+    """
+    if existing.empty:
+        return fetched
+    if fetched.empty:
+        return existing
+
+    combined = pd.concat([existing, fetched], ignore_index=True)
+    if "rcept_no" in combined.columns:
+        combined = combined.drop_duplicates(subset="rcept_no", keep="last")
+    return combined.sort_values("disclosed_date").reset_index(drop=True)
 
 
 def load_insider_trades(tickers: list[str], verbose: bool = True) -> pd.DataFrame:
