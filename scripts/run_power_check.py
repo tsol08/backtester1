@@ -63,18 +63,17 @@ def run(label: str, start: str, end: str) -> None:
     print(f"{label} ({start} ~ {end}) - 거래일 {len(eval_dates)}일, 비겹침 관측 약 {n_obs}개")
     print("=" * 72)
 
-    for threshold, basis in [(1.96, "단일검정 5%"), (2.87, "다중검정 보정")]:
-        table = minimum_detectable_ic(
-            fwd,
-            universe,
-            horizon=HORIZON,
-            candidates=CANDIDATE_ICS,
-            n_trials=N_TRIALS,
-            threshold=threshold,
-        )
-        print(f"\n[검출 기준 |t| > {threshold} ({basis})]")
-        with pd.option_context("display.float_format", "{:.3f}".format):
-            print(table[["실현 IC(평균)", "t-stat 중앙값", "검출률", "검정력 달성"]].to_string())
+    table = minimum_detectable_ic(
+        fwd,
+        universe,
+        horizon=HORIZON,
+        candidates=CANDIDATE_ICS,
+        n_trials=N_TRIALS,
+        thresholds=(1.96, 2.87),
+    )
+    print("\n(검출률: t>1.96 = 단일검정 5% 기준, t>2.87 = 다중검정 보정 기준)")
+    with pd.option_context("display.float_format", "{:.3f}".format):
+        print(table.to_string())
 
 
 def main() -> None:

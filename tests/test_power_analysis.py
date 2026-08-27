@@ -47,10 +47,10 @@ def test_zero_signal_is_not_detected_more_than_chance():
     fwd = _returns()
 
     result = detection_rate(
-        fwd, _universe(), target_ic=0.0, horizon=20, n_trials=100, threshold=1.96
+        fwd, _universe(), target_ic=0.0, horizon=20, n_trials=100, thresholds=(1.96,)
     )
 
-    assert result["검출률"] < 0.15
+    assert result["검출률(t>1.96)"] < 0.15
 
 
 def test_strong_signal_is_almost_always_detected():
@@ -58,10 +58,10 @@ def test_strong_signal_is_almost_always_detected():
     fwd = _returns()
 
     result = detection_rate(
-        fwd, _universe(), target_ic=0.30, horizon=20, n_trials=100, threshold=1.96
+        fwd, _universe(), target_ic=0.30, horizon=20, n_trials=100, thresholds=(1.96,)
     )
 
-    assert result["검출률"] > 0.9
+    assert result["검출률(t>1.96)"] > 0.9
 
 
 def test_detection_rate_rises_with_signal_strength():
@@ -69,7 +69,7 @@ def test_detection_rate_rises_with_signal_strength():
     fwd = _returns()
 
     rates = [
-        detection_rate(fwd, _universe(), ic, horizon=20, n_trials=80, threshold=1.96)["검출률"]
+        detection_rate(fwd, _universe(), ic, horizon=20, n_trials=80, thresholds=(1.96,))["검출률(t>1.96)"]
         for ic in (0.02, 0.10, 0.25)
     ]
 

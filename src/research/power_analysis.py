@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from scipy.special import erfinv
 
 from src.research.ic_analysis import daily_cross_sectional_ic, summarize_ic
 
@@ -45,32 +46,31 @@ def inject_signal(
     """
     masked = fwd_returns.where(universe) if universe is not None else fwd_returns
 
-    ranks = masked.rank(axis=1, pct=True)
-    truth = pd.DataFrame(
-        # 백분위를 표준정규로 바꿔야 선형 합성이 의도한 상관을 만든다
-        np.sqrt(2) * np.vectorize(_inverse_erf)(2 * ranks.to_numpy() - 1),
-        index=ranks.index,
-        columns=ranks.columns,
-    )
+    ranks = masked.rank(axis=1, pct=True).to_numpy()
+    # 백분위를 표준정규로 바꿔야 선형 합성이 의도한 상관을 만든다.
+    # 양 끝(0, 1)은 무한대가 되므로 살짝 안으로 밀어넣는다.
+    ranks = np.clip(ranks, 1e-6, 1 - 1e-6)
+    truth = np.sqrt(2) * erfinv(2 * ranks - 1)
 
-    noise = pd.DataFrame(
-        rng.standard_normal(masked.shape), index=masked.index, columns=masked.columns
-    )
-
+    noise = rng.standard_normal(masked.shape)
     signal = target_ic * truth + np.sqrt(max(0.0, 1 - target_ic**2)) * noise
-    return signal.where(masked.notna())
+
+    return pd.DataFrame(signal, index=masked.index, columns=masked.columns).where(masked.notna())
 
 
-def _inverse_erf(x: float) -> float:
-    """scipy 없이 쓰기 위한 역오차함수 근사 (Winitzki)."""
-    if x <= -1:
-        return -np.inf
-    if x >= 1:
-        return np.inf
-    a = 0.147
-    ln = np.log(1 - x**2)
-    term = 2 / (np.pi * a) + ln / 2
-    return np.sign(x) * np.sqrt(np.sqrt(term**2 - ln / a) - term)
+def _trim_to_universe(
+    fwd_returns: pd.DataFrame, universe: pd.DataFrame
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    유니버스에 한 번이라도 포함된 종목만 남긴다.
+
+    패널은 3,000종목인데 유니버스는 200종목뿐이라, 그대로 두면 시뮬레이션마다
+    쓰이지도 않을 종목의 난수를 생성하고 순위를 매기게 된다. 결과는 같고 시간만
+    십수 배 든다.
+    """
+    used = universe.any(axis=0)
+    used = used[used].index
+    return fwd_returns[used], universe[used]
 
 
 def detection_rate(
@@ -79,24 +79,37 @@ def detection_rate(
     target_ic: float,
     horizon: int,
     n_trials: int = 200,
-    threshold: float = 1.96,
+    thresholds: tuple[float, ...] = (1.96,),
     min_obs: int = 30,
     seed: int = 0,
 ) -> dict:
     """
     target_ic 크기의 신호를 몇 번이나 검출하는지 (= 검정력).
 
-    threshold는 유의성 기준 t값이다. 1.96은 단일 검정 5% 수준이고, 다중검정
+    thresholds는 유의성 기준 t값들이다. 1.96은 단일 검정 5% 수준이고, 다중검정
     보정을 감안하려면 2.9 안팎을 쓴다 — 실제로 우리가 팩터를 판정할 때 쓴 기준이다.
+    여러 기준을 한 번에 받는 이유는, 같은 시뮬레이션 결과에 임계값만 달리 적용하면
+    되는데 기준마다 전체를 다시 돌리는 것이 순전한 낭비이기 때문이다.
     """
+    fwd_returns, universe = _trim_to_universe(fwd_returns, universe)
+
+    # 어차피 horizon 간격으로만 쓸 것이므로 미리 솎아낸다. 매일 IC를 구한 뒤
+    # 20일마다 골라내면 필요한 계산의 20배를 하게 된다.
+    #
+    # non_overlapping_ic는 '유효한 날' 기준으로 간격을 두는 반면 여기서는 달력
+    # 기준으로 솎아내므로 뽑히는 날짜가 조금 다르다. 하지만 검정력을 좌우하는 것은
+    # 독립 관측의 개수이고 그것은 동일하다.
+    fwd_returns = fwd_returns.iloc[::horizon]
+    universe = universe.iloc[::horizon]
+    masked_fwd = fwd_returns.where(universe)
+
     rng = np.random.default_rng(seed)
 
     t_stats = []
     realized_ics = []
     for _ in range(n_trials):
         signal = inject_signal(fwd_returns, target_ic, rng, universe)
-        ic = daily_cross_sectional_ic(signal, fwd_returns.where(universe), min_obs=min_obs)
-        ic = ic.iloc[::horizon]
+        ic = daily_cross_sectional_ic(signal, masked_fwd, min_obs=min_obs)
         if ic.dropna().empty:
             continue
 
@@ -105,13 +118,16 @@ def detection_rate(
         realized_ics.append(summary["평균 IC"])
 
     t_stats = np.array(t_stats)
-    return {
+    result = {
         "목표 IC": target_ic,
         "실현 IC(평균)": float(np.mean(realized_ics)) if len(realized_ics) else np.nan,
         "t-stat 중앙값": float(np.median(t_stats)) if len(t_stats) else np.nan,
-        "검출률": float(np.mean(t_stats > threshold)) if len(t_stats) else np.nan,
         "시행": len(t_stats),
     }
+    for threshold in thresholds:
+        label = f"검출률(t>{threshold})"
+        result[label] = float(np.mean(t_stats > threshold)) if len(t_stats) else np.nan
+    return result
 
 
 def minimum_detectable_ic(
@@ -119,11 +135,8 @@ def minimum_detectable_ic(
     universe: pd.DataFrame,
     horizon: int,
     candidates: list[float],
-    target_power: float = 0.8,
     **kwargs,
 ) -> pd.DataFrame:
-    """여러 신호 강도에 대한 검출률 표. target_power를 넘는 최소 IC를 찾는 데 쓴다."""
+    """여러 신호 강도에 대한 검출률 표. 검정력 80%를 넘는 최소 IC를 찾는 데 쓴다."""
     rows = [detection_rate(fwd_returns, universe, ic, horizon, **kwargs) for ic in candidates]
-    table = pd.DataFrame(rows).set_index("목표 IC")
-    table["검정력 달성"] = table["검출률"] >= target_power
-    return table
+    return pd.DataFrame(rows).set_index("목표 IC")
