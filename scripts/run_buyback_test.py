@@ -28,6 +28,32 @@
   방향이 반대여야 한다. 처분도 양수로 나오면 우리가 재는 것이 자사주 효과가 아니라
   '공시를 많이 하는 회사' 같은 다른 무엇이라는 뜻이다. 이건 가설로 주장하지 않으므로
   검정 횟수에 넣지 않는다 - 부호만 본다.
+
+---
+
+**2026-08-28 1차 결과 (시총 1~200위): 미달.** 연 6.98%, t 1.29, 관측 92개.
+부호는 이론대로였고(처분 -1.88%) 크기도 연 7%였지만 유의하지 않았다.
+
+그런데 자사주 취득 사건 4,692건 중 **상위 200 유니버스 안에 든 것은 1,054건(22%)**
+뿐이었다. 가격 패널에는 4,595건(98%)이 있으므로 데이터가 없어서가 아니라 유니버스를
+잘라서 버린 것이다. 자사주 매입은 원래 중소형주에서 흔하다 - 대형주는 저평가 신호를
+보낼 일이 적다. 현상이 가장 약한 구간에서 찾은 셈이다.
+
+**2차 사전 등록 (시총 201~1000위).** 결과를 보기 전에 다음을 못박았고, 근거는
+전부 사건 분포와 유동성이지 수익률이 아니다:
+
+  유니버스   시총 201~1000위. 사건 1,910건(상위200의 3.3배)이 들어오면서
+             일평균거래대금 중앙값이 13~31억으로 개인 규모에 감당된다.
+             1001위 밖은 사건이 가장 많지만(2,071건) 거래대금 중앙값이 4억이라
+             비용을 감당할 수 없고, 이미 기각된 소형주 가설이 살던 구간이다.
+  유동성 하한 최근 20일 평균 거래대금 10억원. 그 구간 하위 25%가 6.7억이므로
+             아래 3분의 1가량을 자른다.
+  판정       **|t| > 2.24** (Bonferroni 2건). 같은 현상을 두 번째 유니버스에서
+             보는 것이므로 1.96을 그대로 쓰면 두 번의 기회를 한 번인 척하게 된다.
+  2차 관문   비용 차감 후에도 양수여야 한다. 이건 별도 가설이 아니라 필요조건이다.
+
+창(60일)·최소 종목수(5)·호라이즌(20일 비겹침)은 1차와 같게 둔다. 여기서 바꾸면
+무엇이 결과를 바꿨는지 알 수 없게 된다.
 """
 from __future__ import annotations
 
@@ -37,17 +63,21 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+import argparse
+
 import numpy as np
 import pandas as pd
 
 from config import settings
 from src.data_loader.dart_filings import event_dates, load_filings, recent_event_mask
 from src.data_loader.panels import Panels
+from src.data_loader.universe import market_cap_universe_mask
 
 HORIZON = settings.FORWARD_HORIZON
 PERIODS_PER_YEAR = 252 / HORIZON
 EVENT_WINDOW = 60  # 공시 후 며칠까지 신호로 볼 것인가 (PEAD의 표류 창과 동일)
 MIN_EVENT_NAMES = 5
+LIQUIDITY_WINDOW = 20  # 거래대금 평균 구간. 과거만 쓰므로 look-ahead가 없다
 
 ACQUISITION = ["자기주식취득결정", "자기주식취득신탁계약체결결정"]
 DISPOSAL = ["자기주식처분결정"]
@@ -102,14 +132,33 @@ def summarize(excess: pd.Series, label: str, names: pd.Series) -> dict:
     }
 
 
+def build_universe(panels: Panels, rank_from: int, rank_to: int, min_adv: float) -> pd.DataFrame:
+    """시총 순위 구간 + 유동성 하한. 거래대금은 과거 20일 평균이라 미래를 안 본다."""
+    band = market_cap_universe_mask(panels.market_cap, top_k=rank_to, rank_from=rank_from - 1)
+    liquid = panels.trading_value.rolling(LIQUIDITY_WINDOW, min_periods=10).mean() >= min_adv
+    return band & liquid & panels.tradeable
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--rank-from", type=int, default=201)
+    parser.add_argument("--rank-to", type=int, default=1000)
+    parser.add_argument("--min-adv", type=float, default=10.0, help="일평균거래대금 하한(억원)")
+    parser.add_argument("--threshold", type=float, default=2.24)
+    args = parser.parse_args()
+
     print("데이터 로딩...", flush=True)
     panels = Panels.load(start="2015-01-01")
     dates = panels.dates
     forward = panels.close.pct_change(HORIZON, fill_method=None).shift(-HORIZON)
 
+    universe = build_universe(panels, args.rank_from, args.rank_to, args.min_adv * 1e8)
+    members = sorted(universe.columns[universe.any(axis=0)])
+
     filings = load_filings("2015-01-01", dates[-1].strftime("%Y-%m-%d"))
     print(f"주요사항보고서 {len(filings):,}건 / {filings['stock_code'].nunique():,}종목")
+    print(f"유니버스: 시총 {args.rank_from}~{args.rank_to}위, 일평균거래대금 {args.min_adv:.0f}억 이상")
+    print(f"  편입 이력 종목 {len(members):,}개, 일평균 {universe.sum(axis=1).mean():.0f}종목")
 
     print("\n" + "=" * 74)
     print("자사주 관련 공시 (원본만, 정정·연장 제외)")
@@ -128,9 +177,9 @@ def main() -> None:
     results, detail = [], {}
     for label, kinds in (("H1 자사주 취득", ACQUISITION), ("(반증확인) 자사주 처분", DISPOSAL)):
         events = event_dates(filings, kinds)
-        in_universe = events[events["ticker"].isin(panels.members)]
+        in_universe = events[events["ticker"].isin(members)]
         mask = recent_event_mask(in_universe, dates, panels.close.columns, EVENT_WINDOW)
-        table = event_excess(mask, forward, panels.universe & panels.tradeable)
+        table = event_excess(mask, forward, universe)
         if table.empty:
             results.append({"구분": label, "관측": 0})
             continue
@@ -140,7 +189,7 @@ def main() -> None:
         print(f"\n{label}: 사건 {len(events):,}건 중 유니버스 내 {len(in_universe):,}건")
 
     print("\n" + "=" * 74)
-    print(f"판정 (사전 기준 |t| > 1.96, 창 {EVENT_WINDOW}일)")
+    print(f"판정 (사전 기준 |t| > {args.threshold:.2f}, 창 {EVENT_WINDOW}일)")
     print("=" * 74)
     show("", pd.DataFrame(results).set_index("구분"))
 
