@@ -103,15 +103,28 @@ def hold_until_next_rebalance(
     return target
 
 
+def build_price_frames(panels: dict[str, pd.DataFrame], tickers: list[str]) -> dict:
+    """
+    종목별 가격 프레임. 비용 모델이 쓰는 컬럼을 모두 넘긴다.
+
+    trading_value가 빠지면 모델이 종가x거래량으로 대체하는데, 여기서 넘기는 종가는
+    분할 보정된 값이라 거래대금이 수십 배 부풀려진다. high/low가 빠지면 변동성을
+    상수로 대체한다. 둘 다 있으니 둘 다 넘긴다.
+    """
+    return {
+        ticker: pd.DataFrame({name: panel[ticker] for name, panel in panels.items()})
+        for ticker in tickers
+    }
+
+
 def backtest(
     target: pd.DataFrame,
-    close: pd.DataFrame,
-    volume: pd.DataFrame,
+    price_frames: dict,
     cost_model: CostModel,
     capital: float = CAPITAL,
 ):
     tickers = sorted(target.columns[target.any(axis=0)])
-    price_by = {t: pd.DataFrame({"close": close[t], "volume": volume[t]}) for t in tickers}
+    price_by = {t: price_frames[t] for t in tickers}
     signal_by = {t: target[t].astype(float) for t in tickers}
     return run_portfolio_backtest(price_by, signal_by, cost_model, initial_capital=capital)
 
@@ -157,11 +170,18 @@ def performance(label: str, result) -> dict:
 def main() -> None:
     dates = cached_trading_dates(START, END)
     close = build_close_panel(dates)
-    volume = build_panel("volume", dates)
     market_cap = build_panel("market_cap", dates)
     universe = market_cap_universe_mask(market_cap, top_k=TOP_K)
+    panels = {
+        "close": close,
+        "volume": build_panel("volume", dates),
+        "trading_value": build_panel("trading_value", dates),
+        "high": build_panel("high", dates),
+        "low": build_panel("low", dates),
+    }
 
     members = sorted(universe.columns[universe.any(axis=0)])
+    price_frames = build_price_frames(panels, members)
     dart_codes = set(load_corp_codes()["stock_code"])
     fundamentals = load_fundamentals_bulk(
         [t for t in members if t in dart_codes], 2015, 2024, verbose=False
@@ -243,7 +263,7 @@ def main() -> None:
     for label, picks in designs.items():
         target = hold_until_next_rebalance(picks, rebalance_dates, dates, close.columns)
         for tag, model in (("비용 전", FREE), ("비용 후", REAL)):
-            result = backtest(target, close, volume, model)
+            result = backtest(target, price_frames, model)
             results[(label, tag)] = result
             rows.append(performance(f"{label} / {tag}", result))
     show("[성과]", pd.DataFrame(rows).set_index("구분"))
@@ -289,7 +309,7 @@ def main() -> None:
     total = float(results[(STRATEGY_B, "비용 후")].cost_paid.sum())
     rows = []
     for label, model in parts.items():
-        paid = float(backtest(target_b, close, volume, model).cost_paid.sum())
+        paid = float(backtest(target_b, price_frames, model).cost_paid.sum())
         rows.append({"항목": label, "자본대비": paid / CAPITAL, "비중": paid / total})
     rows.append(
         {
@@ -308,7 +328,7 @@ def main() -> None:
     target_a = hold_until_next_rebalance(invested, rebalance_dates, dates, close.columns)
     rows = []
     for capital in (1e8, 1e9, 1e10, 1e11):
-        result = backtest(target_a, close, volume, REAL, capital=capital)
+        result = backtest(target_a, price_frames, REAL, capital=capital)
         rows.append(
             {
                 "자본": f"{capital / 1e8:,.0f}억",
@@ -324,7 +344,7 @@ def main() -> None:
         order = trades[ticker].abs() * CAPITAL
         if not (order > 0).any():
             continue
-        prices = pd.DataFrame({"close": close[ticker], "volume": volume[ticker]})
+        prices = price_frames[ticker]
         rate = REAL.participation_rate(prices, order)
         capped += int(((rate >= MAX_PARTICIPATION) & (order > 0)).sum())
     print(
@@ -333,21 +353,21 @@ def main() -> None:
     )
 
     print("\n" + "=" * 74)
-    print("6) 판정이 무엇에 달려 있는가 - 시장충격 계수는 보정된 적이 없다")
+    print("6) 남은 자유도 하나: 제곱근 법칙의 Y")
     print("=" * 74)
     print(
-        "\n비용 세 가지 중 수수료와 증권거래세는 고시된 값이고 슬리피지 0.05%는 통념이다."
-        "\n반면 시장충격 계수 0.1은 이 프로젝트가 처음부터 들고 있던 기본값일 뿐,"
-        "\n한국 시장 데이터로 맞춰본 적이 없다. 그런데 위에서 전체 비용의 45%를 차지한다."
-        "\n\n참고로 문헌의 제곱근 법칙은 충격 = Y x 일간변동성 x sqrt(참여율) 꼴이다."
-        "\n한국 대형주 일간변동성 2%에 Y=1이면 실효 계수는 0.02 근처가 된다."
-        "\n아래는 '어느 계수부터 결론이 바뀌는가'이지, 낮은 쪽이 옳다는 주장이 아니다."
+        "\n비용 네 항목 중 셋은 이제 추측이 아니다. 수수료와 증권거래세는 고시된 값,"
+        "\n슬리피지 0.05%는 관측된 호가단위의 반값(중앙값 0.034%) 위, 일간변동성은"
+        "\n종목별로 고가/저가에서 직접 잰다."
+        "\n\n남은 것은 Y 하나다. 이건 체결 데이터가 있어야 맞출 수 있고 우리에겐 없다."
+        "\n문헌 보고 범위가 대략 0.3~1.5이므로, 그 구간 전체에서 결론이 유지되는지 본다."
+        "\n예전처럼 '값을 모르는 상수'가 아니라 '범위를 아는 상수'가 됐다는 것이 차이다."
     )
 
     rows = []
-    for coefficient in (0.0, 0.02, 0.05, 0.1):
+    for coefficient in (0.0, 0.3, 1.0, 1.5):
         model = CostModel(impact_coefficient=coefficient)
-        row = {"충격계수": coefficient}
+        row = {"Y": coefficient}
         for strategy, benchmark, only_invested, tag in [
             (STRATEGY_A, BENCHMARK_A, True, "A"),
             (STRATEGY_B, BENCHMARK_B, False, "B"),
@@ -357,7 +377,7 @@ def main() -> None:
                 target = hold_until_next_rebalance(
                     designs[label], rebalance_dates, dates, close.columns
                 )
-                returns = window_returns(backtest(target, close, volume, model).returns,
+                returns = window_returns(backtest(target, price_frames, model).returns,
                                          rebalance_dates)
                 excess = returns if excess is None else (excess - returns).dropna()
             if only_invested:
@@ -365,7 +385,7 @@ def main() -> None:
             row[f"전략{tag} 연율화"] = (1 + excess.mean()) ** PERIODS_PER_YEAR - 1
             row[f"전략{tag} t"] = t_stat(excess)
         rows.append(row)
-    show("[비용 후 초과수익]", pd.DataFrame(rows).set_index("충격계수"))
+    show("[비용 후 초과수익]", pd.DataFrame(rows).set_index("Y"))
 
 
 if __name__ == "__main__":
