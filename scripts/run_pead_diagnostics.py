@@ -78,7 +78,7 @@ def main() -> None:
     members = sorted(universe.columns[universe.any(axis=0)])
     dart_codes = set(load_corp_codes()["stock_code"])
     fundamentals = load_fundamentals_bulk(
-        [t for t in members if t in dart_codes], 2015, 2024, verbose=False
+        [t for t in members if t in dart_codes], 2015, dates[-1].year, verbose=False
     )
 
     fwd = close.pct_change(HORIZON).shift(-HORIZON)

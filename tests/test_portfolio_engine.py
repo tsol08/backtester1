@@ -15,7 +15,7 @@ import pandas as pd
 import pytest
 
 from src.costs.cost_model import CostModel
-from src.portfolio.portfolio_engine import run_portfolio_backtest
+from src.portfolio.portfolio_engine import run_portfolio_backtest, run_weighted_backtest
 
 
 def _flat_price_df(dates: pd.DatetimeIndex) -> pd.DataFrame:
@@ -143,9 +143,13 @@ def test_transaction_tax_charged_on_sells_only():
     assert taxed.cost_paid.loc[dates[1]] == pytest.approx(untaxed.cost_paid.loc[dates[1]])
 
     # 매도가 일어난 day3에는 세금만큼 비용이 더 커야 한다.
-    # 2024년 세율 0.18%, 매도 비중 1.0, 자본 1억 -> 18만원
+    # 2024년 세율 0.18%, 매도 비중 1.0. 곱할 금액은 초기자본이 아니라 **그 시점의
+    # 평가금액**이다 - 매수 비용을 이미 치른 뒤라 1억보다 조금 적다.
+    equity_before_sell = untaxed.equity_curve.loc[dates[2]]
     extra = taxed.cost_paid.loc[dates[3]] - untaxed.cost_paid.loc[dates[3]]
-    assert extra == pytest.approx(0.0018 * 1.0 * 100_000_000)
+
+    assert extra == pytest.approx(0.0018 * 1.0 * equity_before_sell)
+    assert equity_before_sell < 100_000_000
 
 
 def test_transaction_tax_rate_follows_schedule():
@@ -199,3 +203,57 @@ def test_signal_executes_next_day_not_same_day():
 
     assert result.weights["A"].iloc[1] == 0.0  # 신호 뜬 당일엔 아직 미보유
     assert result.weights["A"].iloc[2] == 1.0  # 다음 날 체결
+
+
+def _grown_price_df(dates: pd.DatetimeIndex, total_growth: float) -> pd.DataFrame:
+    """
+    마지막 날까지 total_growth배가 되는 가격. 거래대금과 변동폭은 상수로 고정한다.
+
+    가격이 오르면 거래대금도 같이 오르는 것이 자연스럽지만, 여기서는 **평가금액이
+    주문 크기에 반영되는가**만 보려는 것이라 유동성 쪽을 일부러 묶어둔다.
+    """
+    n = len(dates)
+    close = [100.0 * total_growth ** (i / (n - 1)) for i in range(n)]
+    return pd.DataFrame(
+        {
+            "close": close,
+            "volume": [1_000.0] * n,
+            "trading_value": [1e9] * n,
+            "high": [c * 1.01 for c in close],
+            "low": [c / 1.01 for c in close],
+        },
+        index=dates,
+    )
+
+
+def test_order_size_follows_equity_not_initial_capital():
+    """
+    자산이 불어나면 같은 비중을 사고파는 데 드는 주문금액도 커진다.
+
+    주문금액을 초기자본으로 고정하던 시절에는, 8년간 자산이 두 배가 돼도 마지막
+    거래의 시장충격을 첫날 기준으로 계산했다 - 회전율이 있는 전략일수록 비용이
+    조용히 과소평가된다.
+
+    시장충격만 남기고(수수료/세금 제거) 본다. 충격은 주문금액의 제곱근에 비례하므로
+    지불액은 평가금액의 1.5제곱으로 늘어야 한다: 4배 성장이면 8배.
+    """
+    dates = pd.date_range("2020-01-01", periods=21, freq="B")
+    impact_only = CostModel(commission_rate=0.0, slippage_rate=0.0, apply_transaction_tax=False)
+
+    # 계속 들고 있다가 마지막 날 전량 청산 (체결은 t+1이라 신호를 하루 앞세운다)
+    weights = pd.DataFrame({"A": [1.0] * (len(dates) - 1) + [0.0]}, index=dates)
+
+    flat = run_weighted_backtest(weights, {"A": _grown_price_df(dates, 1.0)}, impact_only)
+    grown = run_weighted_backtest(weights, {"A": _grown_price_df(dates, 4.0)}, impact_only)
+
+    assert grown.cost_paid.iloc[-1] == pytest.approx(8 * flat.cost_paid.iloc[-1], rel=0.02)
+
+
+def test_weighted_backtest_still_executes_next_day():
+    """비중을 직접 받는 경로에서도 t+1 체결은 엔진이 강제한다."""
+    dates = pd.date_range("2020-01-01", periods=4, freq="B")
+    weights = pd.DataFrame({"A": [0.0, 1.0, 1.0, 1.0]}, index=dates)
+
+    result = run_weighted_backtest(weights, {"A": _flat_price_df(dates)}, CostModel())
+
+    assert result.weights["A"].tolist() == [0.0, 0.0, 1.0, 1.0]

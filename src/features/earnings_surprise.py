@@ -30,6 +30,35 @@ import pandas as pd
 MIN_HISTORY = 8  # 표준편차 계산에 필요한 최소 분기 수
 
 
+def _quarterly_grid(fundamentals: pd.DataFrame) -> pd.DataFrame:
+    """
+    분기를 빠짐없는 달력 격자에 올린다. 없는 분기는 NaN으로 남는다.
+
+    **이게 없으면 shift(4)가 '전년 동기'가 아니라 '4행 전'이 된다.** DART 데이터는
+    분기가 자주 빈다(수집한 400종목 전부에 빈 곳이 있고 중앙값 5분기). 그래서
+    격자 없이 세면, 3분기가 빠진 종목의 '전년 동기 대비'가 실제로는 3분기 전과의
+    비교가 되어 계절성 보정이라는 SUE의 존재 이유가 사라진다.
+
+    같은 분기가 두 번 들어온 행도 여기서 정리한다(수집 데이터에 2,844행 있었다).
+    남기는 것은 **가장 이른 공시일**이다 - 시장이 그 숫자를 처음 알게 된 날이고,
+    정정공시를 쓰면 그 시점에 알 수 없던 값을 쓰게 된다.
+    """
+    df = fundamentals.dropna(subset=["fiscal_year", "fiscal_quarter"]).copy()
+    df["quarter"] = pd.PeriodIndex.from_fields(
+        year=df["fiscal_year"].astype(int), quarter=df["fiscal_quarter"].astype(int), freq="Q"
+    )
+    df = df.sort_values("available_date").drop_duplicates(subset="quarter", keep="first")
+    df = df.set_index("quarter").sort_index()
+
+    full = pd.period_range(df.index.min(), df.index.max(), freq="Q")
+    gridded = df.reindex(full)
+    # 메워진 분기도 연/분기는 유효해야 한다. net_income과 available_date만 NaN으로
+    # 남아서, 값이 없다는 사실이 그대로 신호 없음으로 흘러간다.
+    gridded["fiscal_year"] = full.year
+    gridded["fiscal_quarter"] = full.quarter
+    return gridded
+
+
 def compute_sue(fundamentals: pd.DataFrame, shares_outstanding: pd.Series | None = None) -> pd.DataFrame:
     """
     한 종목의 분기 재무데이터에서 SUE를 계산한다.
@@ -38,22 +67,33 @@ def compute_sue(fundamentals: pd.DataFrame, shares_outstanding: pd.Series | None
     발행주식수로 나눠지므로 상쇄되기 때문이다. 다만 유상증자 등으로 주식수가 크게
     변한 종목에서는 달라지므로, 주식수가 주어지면 EPS로 계산한다.
     """
-    df = fundamentals.sort_values(["fiscal_year", "fiscal_quarter"]).copy()
+    df = _quarterly_grid(fundamentals)
 
     earnings = df["net_income"]
     if shares_outstanding is not None:
-        shares = shares_outstanding.reindex(df.index)
+        shares = shares_outstanding.reindex(fundamentals.index)
+        shares.index = pd.PeriodIndex.from_fields(
+            year=fundamentals["fiscal_year"].astype(int),
+            quarter=fundamentals["fiscal_quarter"].astype(int),
+            freq="Q",
+        )
+        shares = shares[~shares.index.duplicated()].reindex(df.index)
         earnings = earnings / shares.where(shares > 0)
 
-    # 전년 동기 대비 변화 (4분기 전)
+    # 전년 동기 대비 변화. 격자 위에서 세므로 shift(4)는 정확히 1년 전이다.
     surprise = earnings - earnings.shift(4)
 
-    # 그 변화량의 과거 변동성. 현재 값을 포함하면 자기 자신으로 표준화되어
-    # 극단값이 눌리므로, shift(1)로 과거만 쓴다.
-    volatility = surprise.shift(1).rolling(MIN_HISTORY, min_periods=MIN_HISTORY).std()
+    # 그 변화량의 과거 변동성. 현재 값을 포함하면 자기 자신으로 표준화되어 극단값이
+    # 눌리므로 shift(1)로 과거만 쓴다. 빈 분기를 건너뛰고 **관측된 8개**를 쓰는 것은
+    # 격자를 도입하기 전과 같은 방식이다 - 여기서 바꾸려는 것은 전년 동기 정렬이지
+    # 표준편차의 표본 수가 아니다.
+    observed = surprise.dropna()
+    volatility = observed.shift(1).rolling(MIN_HISTORY, min_periods=MIN_HISTORY).std()
 
-    df["sue"] = (surprise / volatility.replace(0, np.nan)).replace([np.inf, -np.inf], np.nan)
-    return df
+    df["sue"] = (
+        surprise / volatility.reindex(surprise.index).replace(0, np.nan)
+    ).replace([np.inf, -np.inf], np.nan)
+    return df.reset_index(drop=True)
 
 
 def to_daily_sue(

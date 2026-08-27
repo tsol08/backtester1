@@ -70,7 +70,8 @@ def main() -> None:
     dart_codes = set(load_corp_codes()["stock_code"])
     tickers = [t for t in members if t in dart_codes]
 
-    fundamentals = load_fundamentals_bulk(tickers, 2015, 2024, verbose=False)
+    # 끝 연도를 박아두면 해가 바뀌어도 신호가 조용히 과거에서 멈춘다
+    fundamentals = load_fundamentals_bulk(tickers, 2015, dates[-1].year, verbose=False)
     print(f"DART 재무: {len(fundamentals)}행 / {fundamentals['ticker'].nunique()}종목", flush=True)
 
     sue = build_sue_panel(fundamentals, dates, drift_window=DRIFT_WINDOW)

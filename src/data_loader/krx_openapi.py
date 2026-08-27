@@ -169,23 +169,40 @@ def build_close_panel(dates: pd.DatetimeIndex) -> pd.DataFrame:
     """
     from src.data_loader.price_adjust import load_adjusted_close
 
-    return load_adjusted_close(build_panel("close", dates), build_panel("listed_shares", dates))
+    panels = build_panels(["close", "listed_shares"], dates)
+    return load_adjusted_close(panels["close"], panels["listed_shares"])
 
 
-def build_panel(column: str, dates: pd.DatetimeIndex) -> pd.DataFrame:
-    """캐시된 날짜별 거래 데이터를 (날짜 x 종목) 패널로 조립한다."""
-    rows = {}
+def build_panels(columns: list[str], dates: pd.DatetimeIndex) -> dict[str, pd.DataFrame]:
+    """
+    캐시된 날짜별 거래 데이터를 여러 개의 (날짜 x 종목) 패널로 한 번에 조립한다.
+
+    build_panel을 컬럼마다 부르면 같은 parquet 파일을 컬럼 수만큼 다시 읽는다.
+    6개 컬럼이 필요하면 2천여 개 파일을 6번 훑는 셈이라, 한 번만 읽고 나눠 담는다.
+    """
+    rows: dict[str, dict] = {column: {} for column in columns}
     for date in dates:
         path = _trading_path(date)
         if not path.exists():
             continue
         df = pd.read_parquet(path)
-        if len(df) and column in df.columns:
-            rows[date] = df[column]
+        if not len(df):
+            continue
+        for column in columns:
+            if column in df.columns:
+                rows[column][date] = df[column]
 
-    if not rows:
-        return pd.DataFrame()
+    panels = {}
+    for column in columns:
+        if not rows[column]:
+            panels[column] = pd.DataFrame()
+            continue
+        panel = pd.DataFrame(rows[column]).T
+        panel.index.name = "date"
+        panels[column] = panel.sort_index()
+    return panels
 
-    panel = pd.DataFrame(rows).T
-    panel.index.name = "date"
-    return panel.sort_index()
+
+def build_panel(column: str, dates: pd.DatetimeIndex) -> pd.DataFrame:
+    """캐시된 날짜별 거래 데이터를 (날짜 x 종목) 패널로 조립한다."""
+    return build_panels([column], dates)[column]
