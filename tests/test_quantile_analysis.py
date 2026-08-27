@@ -107,3 +107,22 @@ def test_sampling_reduces_overlapping_observations():
 
     assert len(every_day) == 20
     assert len(sampled) == 4
+
+
+def test_universe_rank_range_selects_the_right_slice():
+    """rank_from을 주면 그 순위부터 시작하는 구간만 편입돼야 한다."""
+    from src.data_loader.universe import market_cap_universe_mask
+
+    dates = pd.bdate_range("2024-01-01", periods=5)
+    caps = pd.DataFrame(
+        {f"T{i:02d}": [float(100 - i)] * len(dates) for i in range(10)}, index=dates
+    )
+
+    top3 = market_cap_universe_mask(caps, top_k=3)
+    mid = market_cap_universe_mask(caps, top_k=6, rank_from=3)
+
+    # 시총은 T00이 가장 크고 T09가 가장 작다
+    assert set(top3.columns[top3.iloc[0]]) == {"T00", "T01", "T02"}
+    assert set(mid.columns[mid.iloc[0]]) == {"T03", "T04", "T05"}
+    # 두 구간은 겹치지 않아야 한다
+    assert not (top3 & mid).any().any()

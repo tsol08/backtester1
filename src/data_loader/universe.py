@@ -140,7 +140,7 @@ def build_universe_snapshots(
 
 
 def market_cap_universe_mask(
-    market_cap: pd.DataFrame, top_k: int = 200, rebalance: str = "QS"
+    market_cap: pd.DataFrame, top_k: int = 200, rebalance: str = "QS", rank_from: int = 0
 ) -> pd.DataFrame:
     """
     시가총액 패널에서 직접 시점별 유니버스 마스크를 만든다.
@@ -152,6 +152,10 @@ def market_cap_universe_mask(
     매일 상위 K를 다시 뽑지 않는 이유: 시총이 경계선에서 흔들리는 종목이 유니버스를
     들락날락하면 팩터 값이 그때마다 끊겨 IC가 왜곡된다. 실제 운용에서도 분기 리밸런싱이
     일반적이다.
+
+    rank_from을 주면 그 순위부터 시작한다. 예를 들어 rank_from=200, top_k=500이면
+    시총 201~500위 구간이다. 대형주는 기관 경쟁이 가장 치열한 영역이라, 경쟁이
+    구조적으로 덜한 중소형 구간을 따로 보기 위한 것이다.
     """
     mask = pd.DataFrame(False, index=market_cap.index, columns=market_cap.columns)
 
@@ -168,7 +172,7 @@ def market_cap_universe_mask(
         if snapshot.empty:
             continue
 
-        members = snapshot.nlargest(top_k).index
+        members = snapshot.nlargest(top_k).index[rank_from:]
         window = mask.index >= start
         if end is not None:
             window &= mask.index < end
