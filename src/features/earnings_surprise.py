@@ -30,7 +30,7 @@ import pandas as pd
 MIN_HISTORY = 8  # 표준편차 계산에 필요한 최소 분기 수
 
 
-def _quarterly_grid(fundamentals: pd.DataFrame) -> pd.DataFrame:
+def quarterly_grid(fundamentals: pd.DataFrame) -> pd.DataFrame:
     """
     분기를 빠짐없는 달력 격자에 올린다. 없는 분기는 NaN으로 남는다.
 
@@ -67,7 +67,7 @@ def compute_sue(fundamentals: pd.DataFrame, shares_outstanding: pd.Series | None
     발행주식수로 나눠지므로 상쇄되기 때문이다. 다만 유상증자 등으로 주식수가 크게
     변한 종목에서는 달라지므로, 주식수가 주어지면 EPS로 계산한다.
     """
-    df = _quarterly_grid(fundamentals)
+    df = quarterly_grid(fundamentals)
 
     earnings = df["net_income"]
     if shares_outstanding is not None:
