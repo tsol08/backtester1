@@ -104,9 +104,18 @@ def fetch_base_info(force_refresh: bool = False) -> pd.DataFrame:
     정보 위주라 스냅샷 하나로 캐싱해도 충분하다.
     """
     as_of = pd.Timestamp.today() - pd.Timedelta(days=1)
-    path = OPENAPI_DIR / "base_info" / f"{as_of.strftime('%Y%m%d')}.parquet"
+    directory = OPENAPI_DIR / "base_info"
+    path = directory / f"{as_of.strftime('%Y%m%d')}.parquet"
     if path.exists() and not force_refresh:
         return pd.read_parquet(path)
+
+    # 어제 날짜 파일이 없으면 **가장 최근 스냅샷**으로 대신한다. 상장일·액면가 같은
+    # 정적 정보라 하루이틀 차이가 의미 없는데, 날짜가 정확히 맞을 때만 캐시를 쓰면
+    # 하루 걸러 한 번씩 API를 치게 되고 네트워크가 막히면 그대로 실패한다.
+    if not force_refresh:
+        cached = sorted(directory.glob("*.parquet")) if directory.exists() else []
+        if cached:
+            return pd.read_parquet(cached[-1])
 
     rows = []
     for market, endpoint in BASE_INFO_ENDPOINTS.items():

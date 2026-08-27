@@ -121,9 +121,16 @@ def main() -> None:
     panels = Panels.load(end=args.end, top_k=args.top_k)
 
     strategy = STRATEGIES[args.strategy]()
-    benchmark = EqualWeightUniverse()
-    for engine in (strategy, benchmark):
-        engine.prepare(panels)
+    strategy.prepare(panels)
+
+    # 전략이 자기 비교 기준을 정해두면 그것을 쓴다. 전략이 고르는 후보 집합 자체가
+    # 유니버스와 다르면, 유니버스를 기준으로 삼는 순간 '후보에 든 것만으로 생기는
+    # 차이'까지 전략 성과로 잡힌다.
+    benchmark = strategy.benchmark() if hasattr(strategy, "benchmark") else EqualWeightUniverse()
+    benchmark.prepare(panels)
+
+    universe_benchmark = EqualWeightUniverse()
+    universe_benchmark.prepare(panels)
 
     print(f"\n{'=' * 74}")
     print(f"전략: {strategy.name}")
@@ -145,7 +152,8 @@ def main() -> None:
 
     schedule = strategy.rebalance_dates()
     results = {}
-    for label, engine in (("전략", strategy), ("벤치마크", benchmark)):
+    for label, engine in (("전략", strategy), ("벤치마크", benchmark),
+                          ("유니버스", universe_benchmark)):
         weights = build_weight_panel(engine, panels)
         held = sorted(weights.columns[(weights != 0).any(axis=0)])
         raw = run_weighted_backtest(
@@ -158,7 +166,8 @@ def main() -> None:
 
     show("[성과]", pd.DataFrame(
         [summarize(f"{label}: {engine.name}", results[label], capital)
-         for label, engine in (("전략", strategy), ("벤치마크", benchmark))]
+         for label, engine in (("전략", strategy), ("벤치마크", benchmark),
+                               ("유니버스", universe_benchmark))]
     ).set_index("구분"))
 
     print("\n" + "=" * 74)
@@ -174,15 +183,26 @@ def main() -> None:
     print("\n" + "=" * 74)
     print("초과수익 (비겹침 리밸런싱 구간)")
     print("=" * 74)
-    excess = (
-        window_returns(results["전략"].returns, schedule)
-        - window_returns(results["벤치마크"].returns, schedule)
-    ).dropna()
     periods_per_year = 252 / getattr(strategy, "horizon", settings.FORWARD_HORIZON)
-    print(f"\n  관측 {len(excess)}개, 구간당 {excess.mean():.2%}"
-          f" -> 연 {(1 + excess.mean()) ** periods_per_year - 1:.2%}")
-    print(f"  t-stat {t_stat(excess):.2f}"
-          f"  ({'기준 1.96 통과' if abs(t_stat(excess)) > 1.96 else '기준 1.96 미달'})")
+    strategy_windows = window_returns(results["전략"].returns, schedule)
+    for label, against, note in (
+        (f"vs {benchmark.name}", "벤치마크", "<- 믿을 수 있는 숫자"),
+        ("vs 유니버스 전체", "유니버스", "<- 후보 집합 효과가 섞여 있다"),
+    ):
+        excess = (strategy_windows - window_returns(results[against].returns, schedule)).dropna()
+        verdict = "1.96 통과" if abs(t_stat(excess)) > 1.96 else "1.96 미달"
+        print(f"\n  {label}")
+        print(
+            f"    관측 {len(excess)}개, 구간당 {excess.mean():.2%}"
+            f" -> 연 {(1 + excess.mean()) ** periods_per_year - 1:.2%},"
+            f" t {t_stat(excess):.2f} ({verdict})   {note}"
+        )
+
+    print(
+        "\n  후보 집합(SUE를 계산할 이력이 있는 종목)은 그 자체로 유니버스를 연 5.53%"
+        "\n  (t 4.12) 이긴다. 신규상장 저조로 설명되는 몫이 1.17%p뿐이고 나머지는"
+        "\n  정체를 모른다. 검정한 적 없는 것을 전략 성과로 세지 않는다."
+    )
 
     print("\n" + "=" * 74)
     print("최근 리밸런싱")

@@ -87,6 +87,39 @@ class EqualWeightUniverse:
         return pd.Series(1.0 / len(members), index=members)
 
 
+class SubsetEqualWeight:
+    """
+    유니버스의 **일부 집합**을 동일가중 보유하는 비교 기준.
+
+    왜 필요한가: 전략이 고르는 후보 집합 자체가 유니버스와 다르면, 유니버스 전체를
+    벤치마크로 쓸 때 '후보에 들어온 것만으로 생기는 차이'가 전략 성과로 잡힌다.
+
+    PEAD가 그렇다. SUE를 가진 종목(3년치 연속 분기 이력이 있는 회사)이 유니버스
+    평균을 연 4.65%(t 2.97) 이기는데, 그중 신규상장 저조로 설명되는 것은 1.17%p뿐이고
+    나머지는 정체를 모른다. 그걸 PEAD 성과에 얹으면 우리가 검정한 적 없는 것을
+    성과로 파는 셈이다. 그래서 **후보 집합 안에서** 비교한다.
+    """
+
+    def __init__(self, mask: pd.DataFrame, name: str, horizon: int = 20):
+        self.mask = mask
+        self.name = name
+        self.horizon = horizon
+        self.panels: Panels | None = None
+
+    def prepare(self, panels: Panels) -> None:
+        self.panels = panels
+
+    def rebalance_dates(self) -> list[pd.Timestamp]:
+        return periodic_schedule(self.panels.dates, self.horizon)
+
+    def target_weights(self, date: pd.Timestamp) -> pd.Series:
+        row = self.mask.loc[date] & self.panels.tradeable.loc[date]
+        members = row.index[row]
+        if len(members) == 0:
+            return pd.Series(dtype=float)
+        return pd.Series(1.0 / len(members), index=members)
+
+
 def build_weight_panel(strategy: Strategy, panels: Panels) -> pd.DataFrame:
     """
     전략을 (날짜 x 종목) 목표비중 패널로 펼친다.

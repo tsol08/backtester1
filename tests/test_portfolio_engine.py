@@ -257,3 +257,33 @@ def test_weighted_backtest_still_executes_next_day():
     result = run_weighted_backtest(weights, {"A": _flat_price_df(dates)}, CostModel())
 
     assert result.weights["A"].tolist() == [0.0, 0.0, 1.0, 1.0]
+
+
+def test_subset_benchmark_holds_only_its_mask():
+    """
+    비교 기준이 유니버스가 아니라 전략의 후보 집합일 때, 그 집합만 들고 있어야 한다.
+
+    전략이 고르는 후보 집합 자체가 유니버스와 다르면, 유니버스를 기준으로 삼는 순간
+    '후보에 든 것만으로 생기는 차이'가 전략 성과로 잡힌다. PEAD에서 그 차이가
+    연 5.53%(t 4.12)였고, 그중 신규상장 저조로 설명되는 것은 1.17%p뿐이었다.
+    """
+    from src.data_loader.panels import Panels
+    from src.strategy.base import SubsetEqualWeight
+
+    dates = pd.date_range("2020-01-01", periods=6, freq="B")
+    tickers = ["A", "B", "C"]
+    frame = pd.DataFrame(1.0, index=dates, columns=tickers)
+    panels = Panels(
+        close=frame, volume=frame, trading_value=frame, high=frame, low=frame,
+        market_cap=frame, universe=pd.DataFrame(True, index=dates, columns=tickers),
+    )
+    mask = pd.DataFrame(
+        {"A": True, "B": True, "C": False}, index=dates
+    )
+
+    benchmark = SubsetEqualWeight(mask, "후보 집합", horizon=2)
+    benchmark.prepare(panels)
+    weights = benchmark.target_weights(dates[0])
+
+    assert set(weights.index) == {"A", "B"}
+    assert weights.sum() == pytest.approx(1.0)
