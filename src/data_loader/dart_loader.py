@@ -11,6 +11,7 @@ DART 응답의 rcept_no 앞 8자리가 접수일자(공시일)이므로, 이를 
 """
 from __future__ import annotations
 
+import hashlib
 import io
 import time
 import xml.etree.ElementTree as ET
@@ -189,18 +190,29 @@ BULK_ACCOUNT_NAMES = {
 }
 
 
-def _bulk_path(year: int, report_code: str, batch_index: int) -> Path:
-    return DART_DIR / f"bulk_{year}_{report_code}_{batch_index}.parquet"
+def _bulk_path(year: int, report_code: str, corp_codes: list[str]) -> Path:
+    """
+    캐시 파일명을 **배치에 든 기업들**로 정한다.
+
+    배치 순번으로 이름을 지으면, 요청 목록이 바뀌었을 때 같은 순번이 다른 기업들을
+    가리키는데도 예전 파일을 그대로 읽는다. 실제로 유니버스를 상위 200위에서
+    500위로 넓혔을 때 이 일이 벌어졌다 - 배치 0~4가 옛 466종목 목록의 내용을
+    돌려주는 바람에 **591종목의 재무가 통째로 비었고**, 그 결과 '재무가 있는
+    종목'이 대체로 옛 대형주 집단이 되어 유니버스를 이기는 것처럼 보였다
+    (연 5.53%, t 4.12). 경제 현상이 아니라 캐시 충돌이었다.
+    """
+    digest = hashlib.sha1(",".join(sorted(corp_codes)).encode()).hexdigest()[:12]
+    return DART_DIR / f"bulk_{year}_{report_code}_{digest}.parquet"
 
 
 def fetch_financials_bulk(
-    corp_codes: list[str], year: int, report_code: str, batch_index: int, force_refresh: bool = False
+    corp_codes: list[str], year: int, report_code: str, force_refresh: bool = False
 ) -> pd.DataFrame:
     """
     최대 100개 기업의 주요계정을 한 번에 가져온다 (fnlttMultiAcnt).
     개별 조회(fnlttSinglAcntAll) 대비 호출 수가 100분의 1로 줄어든다.
     """
-    path = _bulk_path(year, report_code, batch_index)
+    path = _bulk_path(year, report_code, corp_codes)
     if path.exists() and not force_refresh:
         return pd.read_parquet(path)
 
@@ -270,8 +282,8 @@ def load_fundamentals_bulk(
     frames = []
     for year in range(start_year, end_year + 1):
         for report_code in REPORT_CODES:
-            for batch_index, batch in enumerate(batches):
-                df = fetch_financials_bulk(batch, year, report_code, batch_index)
+            for batch in batches:
+                df = fetch_financials_bulk(batch, year, report_code)
                 if not df.empty:
                     frames.append(df)
         if verbose:

@@ -28,12 +28,9 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import pandas as pd
 
 from src.data_loader.dart_loader import load_corp_codes, load_fundamentals_bulk
-from src.data_loader.krx_openapi import build_panel, cached_trading_dates
-from src.data_loader.universe import market_cap_universe_mask
+from src.data_loader.panels import Panels
 
-DEFAULT_TOP_K = 200
-START_YEAR = 2015
-UNIVERSE_START = "2015-01-01"
+DEFAULT_START_YEAR = 2015
 
 
 def collection_range() -> tuple[int, int]:
@@ -51,14 +48,13 @@ def universe_size() -> int:
 def main() -> None:
     start_year, end_year = collection_range()
     top_k = universe_size()
-    dates = cached_trading_dates(UNIVERSE_START, f"{end_year}-12-31")
-    if len(dates) == 0:
-        print("가격 패널이 없다. collect_openapi_panel.py를 먼저 실행할 것.")
-        return
 
-    market_cap = build_panel("market_cap", dates)
-    universe = market_cap_universe_mask(market_cap, top_k=top_k)
-    members = sorted(universe.columns[universe.any(axis=0)])
+    # 유니버스를 분석과 **똑같은 코드로** 유도한다. 여기서 기간을 따로 잡으면 편입
+    # 종목 목록이 어긋나고, 그러면 분석이 캐시에 없는 종목을 요청하며 네트워크를
+    # 친다. 실제로 수집은 2015년부터, 분석은 2010년부터 세는 바람에 목록이
+    # 1,235개와 1,439개로 갈렸다.
+    panels = Panels.load(top_k=top_k)
+    members = panels.members
 
     dart_codes = set(load_corp_codes()["stock_code"])
     tickers = [t for t in members if t in dart_codes]

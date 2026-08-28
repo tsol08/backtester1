@@ -132,3 +132,21 @@ def test_panels_are_built_for_a_normal_company():
     assert last["book_to_market"] == pytest.approx((500.0 + 10 * 2024) / 2000.0)
     assert last["roe"] == pytest.approx(40.0 / (500.0 + 10 * 2024))  # TTM = 공시된 연간값
     assert last["asset_growth"] == pytest.approx(20 / (1000.0 + 20 * 2023))
+
+
+def test_bulk_cache_is_keyed_by_batch_contents_not_position():
+    """
+    배치 캐시 파일명은 그 배치에 든 기업들로 정해져야 한다.
+
+    순번으로 이름을 지으면 요청 목록이 바뀌었을 때 같은 순번이 다른 기업들을 가리키는데도
+    예전 파일을 읽는다. 유니버스를 상위 200위에서 500위로 넓혔을 때 실제로 그랬고,
+    591종목의 재무가 통째로 빈 채 't 4.12짜리 커버리지 효과'로 둔갑했다.
+    """
+    from src.data_loader.dart_loader import _bulk_path
+
+    first = _bulk_path(2024, "11011", ["00126380", "00164779"])
+    same_set_other_order = _bulk_path(2024, "11011", ["00164779", "00126380"])
+    different_set = _bulk_path(2024, "11011", ["00126380", "00999999"])
+
+    assert first == same_set_other_order  # 순서는 상관없다
+    assert first != different_set  # 구성이 다르면 다른 파일이다
