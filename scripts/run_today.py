@@ -6,8 +6,16 @@
 진짜 아웃오브샘플인데, 표본이 쌓이기를 기다리는 방법은 굴리면서 기록하는 것뿐이다.
 기록해두지 않으면 나중에 "그때 정말 이걸 샀을까"를 확인할 수 없다.
 
-주의: 이 파일은 매매 지시가 아니다. PEAD는 비겹침 관측 61개에 t 2.5인 가설이고
-확정된 것이 아니다. 근거와 유보는 experiments/log.md에 있다.
+**주의: 이 파일은 매매 지시가 아니다. PEAD는 배포 판정을 받지 못했다.**
+마찰 없는 신호는 연 9.55%(t 2.69)로 실재하지만, 굴릴 수 있는 형태로 바꾸는 데
+세 번 사전 등록해서 세 번 다 미달했다(최고 t 1.26 < 2.39). 그래도 기록을 남기는
+이유는 진짜 아웃오브샘플을 만드는 유일한 방법이기 때문이다. 근거와 유보는
+experiments/log.md 2026-08-28 (5)(6)에 있다.
+
+**유니버스는 상위 500위가 기본이다.** 세 구현을 판정한 것이 그 구성이라
+그렇게 맞춰둔다(`config.settings.UNIVERSE_TOP_K`는 200이지만 그건 팩터 연구의
+기본값이다). --top-k로 바꾸면 **검정한 적 없는 구성의 기록이 쌓인다** - 그래서
+기록 파일에 top_k와 idle을 함께 적고, 다르면 경고한다.
 
 사용:
     python scripts/run_today.py
@@ -34,6 +42,11 @@ from src.strategy.pead import PeadStrategy
 LIVE_DIR = PROJECT_ROOT / "data" / "processed" / "live"
 STALE_SIGNAL_DAYS = 120  # 분기 공시 주기보다 길면 데이터가 멈춘 것이다
 
+# PEAD 세 구현을 사전 등록하고 판정한 유니버스 크기다(src/strategy/pead.py 참조).
+# settings.UNIVERSE_TOP_K(200)은 팩터 연구의 기본값이지 이 전략의 구성이 아니라,
+# 그걸 그대로 쓰면 검정한 적 없는 포트폴리오가 기록으로 쌓인다.
+REGISTERED_TOP_K = 500
+
 STRATEGIES = {
     "pead": lambda: PeadStrategy(idle="persist"),
     "pead-covered": lambda: PeadStrategy(idle="covered"),
@@ -54,8 +67,8 @@ def ticker_names() -> pd.Series:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--strategy", default="pead", choices=sorted(STRATEGIES))
-    parser.add_argument("--top-k", type=int, default=settings.UNIVERSE_TOP_K,
-                        help="유니버스 크기 (시총 상위 N종목)")
+    parser.add_argument("--top-k", type=int, default=REGISTERED_TOP_K,
+                        help=f"유니버스 크기 (기본 {REGISTERED_TOP_K} = PEAD 사전 등록 값)")
     parser.add_argument("--capital", type=float, default=settings.INITIAL_CAPITAL / 1e4,
                         help="투자금, 만원 단위 (기본 10000 = 1억)")
     parser.add_argument("--no-record", action="store_true", help="기록을 남기지 않는다")
@@ -141,10 +154,23 @@ def main() -> None:
               " 소액에서는 백테스트 성과를 그대로 얻을 수 없다는 뜻이다.")
 
     if not args.no_record:
+        if args.top_k != REGISTERED_TOP_K:
+            print()
+            print(f"  ** 유니버스 상위 {args.top_k}위는 사전 등록된 구성"
+                  f"({REGISTERED_TOP_K}위)이 아니다."
+                  " 검정한 적 없는 포트폴리오가 기록으로 남는다.")
         LIVE_DIR.mkdir(parents=True, exist_ok=True)
         path = LIVE_DIR / f"{args.strategy}_{rebalance_date.strftime('%Y%m%d')}.parquet"
+        # 구성을 같이 적는다. 기록을 남기는 이유가 나중에 '그때 정말 이걸
+        # 골랐는가'를 대조하려는 것인데, 어느 유니버스에 어느 idle로 낸 것인지를
+        # 안 적어두면 그 대조가 불가능하다.
         record = holdings.assign(
-            rebalance_date=rebalance_date, as_of=as_of, recorded_at=pd.Timestamp.now()
+            rebalance_date=rebalance_date,
+            as_of=as_of,
+            recorded_at=pd.Timestamp.now(),
+            strategy=args.strategy,
+            top_k=args.top_k,
+            idle=getattr(strategy, "idle", ""),
         )
         record.to_parquet(path)
         print(f"\n기록: {path.relative_to(PROJECT_ROOT)}")
