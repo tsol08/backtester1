@@ -34,8 +34,9 @@ from src.strategy.base import EqualWeightUniverse, build_weight_panel
 from src.strategy.pead import PeadStrategy
 
 STRATEGIES = {
-    "pead": lambda: PeadStrategy(hold_universe_when_idle=True),
-    "pead-cash": lambda: PeadStrategy(hold_universe_when_idle=False),
+    "pead": lambda: PeadStrategy(idle="persist"),
+    "pead-covered": lambda: PeadStrategy(idle="covered"),
+    "pead-cash": lambda: PeadStrategy(idle="cash"),
     "universe": EqualWeightUniverse,
 }
 

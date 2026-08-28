@@ -35,8 +35,9 @@ LIVE_DIR = PROJECT_ROOT / "data" / "processed" / "live"
 STALE_SIGNAL_DAYS = 120  # 분기 공시 주기보다 길면 데이터가 멈춘 것이다
 
 STRATEGIES = {
-    "pead": lambda: PeadStrategy(hold_universe_when_idle=True),
-    "pead-cash": lambda: PeadStrategy(hold_universe_when_idle=False),
+    "pead": lambda: PeadStrategy(idle="persist"),
+    "pead-covered": lambda: PeadStrategy(idle="covered"),
+    "pead-cash": lambda: PeadStrategy(idle="cash"),
     "universe": EqualWeightUniverse,
 }
 
