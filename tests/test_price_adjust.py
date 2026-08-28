@@ -55,6 +55,45 @@ def test_share_issuance_is_not_adjusted():
     assert returns.iloc[2] == pytest.approx(-0.01)
 
 
+def test_small_bonus_issue_is_adjusted():
+    """
+    무상증자 20%도 보정돼야 한다. **이게 실제로 빠져 있던 버그다.**
+
+    주식수가 1.2배가 되면 주가는 1/1.2로 16.7% 빠진다. 주주는 주식이 1.2배가 되어
+    손익이 0인데, 예전 판정 조건에 '원본 수익률 30% 초과 급변'이 들어 있어서
+    이 정도 크기는 기업행위로 인정되지 않았다. 30%는 국내 가격제한폭에서 가져온
+    값이지 기업행위의 성질이 아니다.
+
+    실사 결과 이렇게 놓친 것이 325건(254종목)이었고 313건이 가짜 하락이었다
+    (중앙값 -6.8%). experiments/log.md 2026-08-28 참조.
+    """
+    close = _panel([1200.0, 1200.0, 1000.0, 1000.0, 1000.0])
+    shares = _panel([1_000.0, 1_000.0, 1_200.0, 1_200.0, 1_200.0])
+
+    returns = adjust_close(close, shares)["A"].pct_change(fill_method=None)
+
+    assert returns.iloc[2] == pytest.approx(0.0), "무상증자로 손익이 생기면 안 된다"
+
+
+def test_reverse_split_with_limit_move_on_resumption_is_still_adjusted():
+    """
+    액면병합은 거래정지를 끼고 이뤄져서 재개일에 상한가를 치는 일이 흔하다.
+
+    주식수 1/5, 주가는 5배가 아니라 6.4배(=5 x 1.28)로 찍힌다. 잔차 28%는 가격제한폭
+    (±30%) 안이므로 실제로 있을 수 있는 하루 등락이고, 보정은 여전히 해야 한다.
+    보정을 포기하면 **+540%짜리 가짜 수익률**이 그대로 남는다.
+
+    실제 데이터에서 이런 건이 427건이었다. 한때 잔차 상한을 0.10으로 좁혔다가
+    이것들이 통째로 빠지는 것을 보고 되돌렸다.
+    """
+    close = _panel([1000.0, 1000.0, 6400.0, 6400.0, 6400.0])
+    shares = _panel([10_000.0, 10_000.0, 2_000.0, 2_000.0, 2_000.0])
+
+    returns = adjust_close(close, shares)["A"].pct_change(fill_method=None)
+
+    assert returns.iloc[2] == pytest.approx(0.28), "병합은 보정하되 진짜 등락은 남는다"
+
+
 def test_normal_moves_are_untouched():
     """평범한 등락은 주식수가 그대로이므로 아무 영향이 없어야 한다."""
     close = _panel([1000.0, 1100.0, 1050.0, 1080.0, 1020.0])

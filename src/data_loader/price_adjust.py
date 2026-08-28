@@ -24,12 +24,52 @@ import pandas as pd
 
 # 분할 판정 기준
 MIN_SHARES_CHANGE = 0.05  # 주식수가 최소 5%는 변해야 후보
-MIN_RAW_MOVE = 0.30  # 원본 수익률이 이만큼 급변해야 후보 (국내 가격제한폭이 ±30%)
-MAX_ADJUSTED_MOVE = 0.30  # 보정 후 수익률이 이 안으로 들어와야 분할로 인정
+
+# 보정 후 남는 수익률(잔차)의 상한. 국내 가격제한폭이 ±30%라 잔차가 그 안이면
+# 실제로 있을 수 있는 하루 등락이고, 넘으면 주식수로 설명이 안 된 것이다.
+#
+# 한때 이걸 0.10으로 좁혔다가 되돌렸다. 액면병합(주식수 x0.2)은 거래정지를 끼고
+# 이뤄져서 재개일에 상한가를 치는 일이 흔한데, 그러면 잔차가 정확히 30%가 된다.
+# 0.10으로 좁히면 그 427건이 보정에서 빠지고 **+550%짜리 가짜 수익률**이 남는다.
+MAX_ADJUSTED_MOVE = 0.30
+
+# 주가가 '주식수 변화가 함의하는 만큼'의 최소 몇 배는 움직여야 하는가.
+# 무상증자 20%면 함의 하락폭이 16.7%다. 예전에는 여기에 '원본 수익률 30% 초과'라는
+# 고정 문턱을 썼는데, 30%는 국내 가격제한폭에서 가져온 값이지 기업행위의 성질이
+# 아니다. 그 문턱이 작은 무상증자를 통째로 놓쳤다 - 실사 결과 미보정 325건(254종목),
+# 그중 313건이 **가짜 하락**이었고 중앙값이 -6.8%였다(2026-08-28).
+MIN_EXPLAINED_FRACTION = 0.5
 
 # 국내 주식은 가격제한폭이 ±30%라 하루에 이보다 큰 변동은 물리적으로 불가능하다.
 # 보정 후에도 남아있다면 거래정지 후 재개, 종목코드 재사용 등 데이터 이슈로 본다.
 IMPOSSIBLE_DAILY_MOVE = 0.50
+
+
+def is_corporate_action(close: pd.DataFrame, listed_shares: pd.DataFrame) -> pd.DataFrame:
+    """
+    그 날 주가 변동이 주식수 변화로 설명되는가 (= 보정해야 하는 날인가).
+
+    판정을 따로 뺀 이유: 실사 스크립트가 같은 기준으로 세야 하는데, 조건을 두 곳에
+    적어두면 갈라진다. 실제로 이 조건이 틀렸던 것을 실사로 잡았다(2026-08-28).
+    """
+    price_ratio = close / close.shift(1)
+    shares_ratio = listed_shares / listed_shares.shift(1)
+
+    raw_move = (price_ratio - 1).abs()
+    adjusted_move = (price_ratio * shares_ratio - 1).abs()
+
+    # 주식수가 k배가 되는 기업행위면 주가는 1/k배가 된다. 그 함의 폭을 기준으로
+    # 삼으면 분할 50:1이든 무상증자 20%든 같은 잣대로 잡힌다.
+    implied_move = (1 - 1 / shares_ratio).abs()
+
+    return (
+        ((shares_ratio - 1).abs() > MIN_SHARES_CHANGE)
+        # 주가가 실제로 그 방향으로 충분히 움직였는가. 유상증자처럼 주식수만 늘고
+        # 주가가 그대로면 여기서 걸러진다 - 보정하면 없는 수익이 생기기 때문이다.
+        & (raw_move > implied_move * MIN_EXPLAINED_FRACTION)
+        # 보정하고 나면 평범한 등락만 남는가
+        & (adjusted_move < MAX_ADJUSTED_MOVE)
+    )
 
 
 def split_adjustment_factor(close: pd.DataFrame, listed_shares: pd.DataFrame) -> pd.DataFrame:
@@ -39,20 +79,8 @@ def split_adjustment_factor(close: pd.DataFrame, listed_shares: pd.DataFrame) ->
     반환값을 곱하면 분할 이후 구간의 가격이 분할 이전 스케일로 환산되어,
     시계열 전체에서 수익률이 연속적으로 이어진다.
     """
-    price_ratio = close / close.shift(1)
     shares_ratio = listed_shares / listed_shares.shift(1)
-
-    raw_move = (price_ratio - 1).abs()
-    adjusted_move = (price_ratio * shares_ratio - 1).abs()
-
-    is_split = (
-        ((shares_ratio - 1).abs() > MIN_SHARES_CHANGE)
-        & (raw_move > MIN_RAW_MOVE)
-        & (adjusted_move < MAX_ADJUSTED_MOVE)
-        & (adjusted_move < raw_move)
-    )
-
-    factor = shares_ratio.where(is_split, 1.0).fillna(1.0)
+    factor = shares_ratio.where(is_corporate_action(close, listed_shares), 1.0).fillna(1.0)
     return factor.cumprod()
 
 
