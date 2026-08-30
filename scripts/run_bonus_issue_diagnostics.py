@@ -183,7 +183,8 @@ def main() -> None:
     report("무상증자 종목 바스켓", basket)
     share = (bonus_mask.loc[schedule].sum(axis=1)
              / panels.universe.loc[schedule].sum(axis=1)).mean()
-    implied = annualize(basket.mean()) * share / (1 - share) if not basket.empty else np.nan
+    # 제외하면 부호가 뒤집힌다: 부진한 것을 빼면 나머지가 올라간다.
+    implied = -annualize(basket.mean()) * share / (1 - share) if not basket.empty else np.nan
     print(f"  -> 이 부진폭이면 제외 전략 초과는 연 {implied:+.2%}"
           f"  (실측 +1.12%와 맞아야 한다)")
 
@@ -191,11 +192,37 @@ def main() -> None:
     print("\n" + "-" * 80)
     print("D3  공시 직전 6개월 수익률로 나누면 어느 쪽에 몰려 있는가")
     print("-" * 80)
-    prior = panels.close.pct_change(LOOKBACK, fill_method=None)
-    prior_rank = prior.where(panels.universe).rank(axis=1, pct=True)
+    # 사전 등록은 "**공시 직전** 6개월 수익률로 나눈다"였다. 현재 시점의 6개월
+    # 수익률로 나누면 '지금 상승 추세인가'를 재는 것이라 전혀 다른 질문이 된다.
+    # 사건별로 공시일 기준 직전 수익률을 구해 사건 자체를 둘로 가른다.
+    prior_returns = {}
+    for _, row in inside.iterrows():
+        ticker, event_day = row["ticker"], row["event_date"]
+        if ticker not in panels.close.columns:
+            continue
+        i = int(dates.searchsorted(event_day))
+        if i < LOOKBACK or i >= len(dates):
+            continue
+        before, at = panels.close[ticker].iloc[i - LOOKBACK], panels.close[ticker].iloc[i]
+        if pd.notna(before) and pd.notna(at) and before > 0:
+            prior_returns[(ticker, event_day)] = at / before - 1
 
-    hot = bonus_mask & (prior_rank > 0.5)
-    cold = bonus_mask & (prior_rank <= 0.5)
+    if prior_returns:
+        cutoff = float(np.median(list(prior_returns.values())))
+        keys = inside.set_index(["ticker", "event_date"]).index
+        is_hot = pd.Series(
+            [prior_returns.get(k, np.nan) for k in keys], index=range(len(inside))
+        ) > cutoff
+        hot_events = inside[is_hot.fillna(False).to_numpy()]
+        cold_events = inside[(~is_hot.fillna(True)).to_numpy()]
+        print(f"  공시 직전 {LOOKBACK}거래일 수익률 중앙값 {cutoff:+.1%}"
+              f"  (급등 {len(hot_events)}건 / 그 외 {len(cold_events)}건)")
+        hot = recent_event_mask(
+            hot_events, dates, panels.close.columns, EVENT_WINDOW) & panels.universe
+        cold = recent_event_mask(
+            cold_events, dates, panels.close.columns, EVENT_WINDOW) & panels.universe
+    else:
+        hot = cold = bonus_mask & False
     report("급등한 쪽 (직전 6개월 상위 절반)", excess_of(hot, fwd, panels.universe, schedule))
     report("안 급등한 쪽 (하위 절반)", excess_of(cold, fwd, panels.universe, schedule))
     print("  -> 급등한 쪽에만 몰려 있으면 발행 효과가 아니라 반전 효과다.")
